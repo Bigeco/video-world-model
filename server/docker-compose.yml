@@ -1,0 +1,92 @@
+services:
+
+  # --------------------------------------------------------------------
+  # 게이트웨이 — 유일하게 외부(터널)에 노출되는 컨테이너
+  # --------------------------------------------------------------------
+  gateway:
+    build:
+      context: .
+      dockerfile: gateway/Dockerfile
+    # 127.0.0.1에만 바인딩한다. cloudflared가 여기로 붙고,
+    # 랩 네트워크의 다른 사람이 직접 접근하지는 못한다.
+    ports:
+      - "127.0.0.1:8080:8000"
+    environment:
+      WM_TOKENS: ${WM_TOKENS}
+      WM_ALLOWED_ORIGINS: ${WM_ALLOWED_ORIGINS}
+      WM_SESSION_TTL: ${WM_SESSION_TTL:-120}
+      WM_IDLE_TIMEOUT: ${WM_IDLE_TIMEOUT:-30}
+      WM_MAX_QUEUE: ${WM_MAX_QUEUE:-12}
+      WM_WORKER_OASIS: ws://oasis:8000/session
+      WM_WORKER_DIAMOND_CSGO: ws://diamond:8000/session
+      WM_WORKER_DIAMOND_ATARI: ws://diamond:8000/session
+      WM_CAP_OASIS: ${WM_CAP_OASIS:-1}
+      WM_CAP_DIAMOND_CSGO: ${WM_CAP_DIAMOND_CSGO:-1}
+      WM_CAP_DIAMOND_ATARI: ${WM_CAP_DIAMOND_ATARI:-2}
+    depends_on: [oasis, diamond]
+    restart: unless-stopped
+
+  # --------------------------------------------------------------------
+  # Oasis 워커 — GPU 0
+  # --------------------------------------------------------------------
+  oasis:
+    build:
+      context: .
+      dockerfile: workers/oasis.Dockerfile
+    environment:
+      WM_MODEL: oasis
+      WM_DEFAULT_MODEL: oasis
+      WM_DUMMY: ${WM_DUMMY:-0}
+      WM_OASIS_CKPT: /weights/oasis500m.pt
+      WM_OASIS_VAE: /weights/vit-l-20.pt
+      WM_DIFFUSION_STEPS: ${WM_DIFFUSION_STEPS:-8}
+      WM_FPS_OASIS: ${WM_FPS_OASIS:-20}
+      NVIDIA_VISIBLE_DEVICES: "0"
+    volumes:
+      - ${WM_WEIGHTS_DIR:-./weights}:/weights:ro
+    shm_size: "8gb"
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["0"]
+              capabilities: [gpu]
+
+  # --------------------------------------------------------------------
+  # DIAMOND 워커 (CS:GO + Atari 양쪽 서빙) — GPU 1
+  # --------------------------------------------------------------------
+  diamond:
+    build:
+      context: .
+      dockerfile: workers/diamond.Dockerfile
+    environment:
+      WM_MODEL: diamond
+      WM_DEFAULT_MODEL: diamond-csgo
+      WM_DUMMY: ${WM_DUMMY:-0}
+      WM_DIAMOND_CSGO_CKPT: /weights/diamond_csgo.pt
+      WM_DIAMOND_ATARI_CKPT: /weights/diamond_atari.pt
+      WM_DENOISE_STEPS: ${WM_DENOISE_STEPS:-3}
+      NVIDIA_VISIBLE_DEVICES: "1"
+    volumes:
+      - ${WM_WEIGHTS_DIR:-./weights}:/weights:ro
+    shm_size: "8gb"
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["1"]
+              capabilities: [gpu]
+
+  # --------------------------------------------------------------------
+  # Cloudflare Tunnel — 아웃바운드만 쓰므로 방화벽을 건드리지 않는다
+  # --------------------------------------------------------------------
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    command: tunnel --no-autoupdate run --token ${CF_TUNNEL_TOKEN}
+    depends_on: [gateway]
+    restart: unless-stopped
+    profiles: ["tunnel"]

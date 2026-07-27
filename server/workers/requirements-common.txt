@@ -1,0 +1,6 @@
+fastapi>=0.110
+uvicorn[standard]>=0.27
+websockets>=12.0
+numpy>=1.24
+opencv-python-headless>=4.9      # 없으면 pillow로 자동 폴백
+pillow>=10.0
