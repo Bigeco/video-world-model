@@ -627,6 +627,18 @@ function connect(m){
     S.connected = true;
     setStatus("wait", "세션 요청");
     send({ type:"init", model:m.id, fps:S.tickHz });
+
+    // 소켓은 열렸는데 ready도 queue도 안 오는 경우를 잡는다.
+    // 보통 게이트웨이는 살아 있지만 워커가 안 떠 있을 때 발생한다.
+    S.readyGuard = setTimeout(() => {
+      try{ ws.close(); }catch(e){}
+      setStatus("err", "응답 없음");
+      overlay("세션이 시작되지 않습니다",
+        "서버에는 연결됐지만 20초 안에 세션이 열리지 않았습니다. " +
+        "게이트웨이는 살아 있는데 워커가 안 떠 있을 때 주로 발생합니다. " +
+        "서버에서 server/.run/*.log 를 확인하세요.",
+        { spinner:false, button:"모델 목록으로", onClick: endSession });
+    }, 20000);
   };
 
   ws.onmessage = (ev) => {
@@ -638,6 +650,7 @@ function connect(m){
 
   ws.onclose = (ev) => {
     clearTimeout(guard);
+    clearTimeout(S.readyGuard);
     stopLoops();
     S.connected = false;
     if (ev.code === 4001) fail("액세스 키가 거부되었습니다.");
@@ -659,6 +672,10 @@ function send(obj){
 }
 
 function handleJson(msg){
+  // queue든 ready든 서버가 반응했다는 뜻이므로 대기 타이머를 푼다
+  if (msg.type === "queue" || msg.type === "ready" || msg.type === "error"){
+    clearTimeout(S.readyGuard);
+  }
   switch (msg.type){
     case "queue":
       setStatus("wait", `대기열 ${msg.position}번`);
