@@ -57,6 +57,10 @@
     animation:pulse 1.1s ease-in-out infinite}
   .status.err .led{background:var(--err);box-shadow:0 0 8px var(--err)}
   .status.mock .led{background:var(--accent);box-shadow:0 0 8px var(--accent)}
+  .status.err{border-color:var(--err);color:var(--err)}
+  .status.clickable{cursor:pointer}
+  .status.clickable::after{content:"ⓘ";margin-left:2px;opacity:.7}
+  .status.clickable:hover{filter:brightness(1.2)}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
 
   .ghost{
@@ -204,6 +208,21 @@
   .switch{display:flex;align-items:center;gap:10px;font-size:13.5px;color:var(--fg-dim);
     cursor:pointer;margin-bottom:8px}
   .switch input{width:16px;height:16px;accent-color:var(--accent);cursor:pointer}
+  .diag-inner{max-width:640px}
+  .diag-ctx{font-family:var(--mono);font-size:11.5px;color:var(--fg-dim);
+    background:var(--bg);border:1px solid var(--line-soft);border-radius:8px;
+    padding:9px 12px;margin-bottom:14px;line-height:1.6}
+  .diag-body{max-height:52vh;overflow-y:auto;border:1px solid var(--line-soft);
+    border-radius:9px;background:var(--bg)}
+  .drow{display:flex;gap:10px;padding:8px 12px;border-bottom:1px solid var(--line-soft);
+    font-size:12.5px;line-height:1.5}
+  .drow:last-child{border-bottom:none}
+  .dts{font-family:var(--mono);font-size:11px;color:var(--fg-faint);flex-shrink:0;padding-top:1px}
+  .dmsg{color:var(--fg);word-break:break-word}
+  .ddetail{color:var(--fg-dim);font-size:11.5px;margin-top:3px;line-height:1.55}
+  .drow.derr{background:rgba(255,107,107,.07)}
+  .drow.derr .dmsg{color:var(--err)}
+  .drow.dwarn .dmsg{color:var(--warn)}
   footer{border-top:1px solid var(--line-soft);padding:22px 0;margin-top:40px;
     color:var(--fg-faint);font-size:12px}
 </style>
@@ -218,7 +237,7 @@
       <small>Lab Playground</small>
     </div>
     <div class="spacer"></div>
-    <div class="status" id="status"><span class="led"></span><span id="statusText">대기</span></div>
+    <div class="status" id="status" title="상태 (오류 시 클릭하면 상세)"><span class="led"></span><span id="statusText">대기</span></div>
     <button class="ghost" id="btnSettings">설정</button>
     <button class="ghost" id="btnHome" style="display:none">모델 목록</button>
   </div>
@@ -355,6 +374,19 @@
   </div>
 </div>
 
+<!-- ============ DIAGNOSTICS ============ -->
+<div class="modal" id="diagModal">
+  <div class="inner diag-inner">
+    <h4>진단 로그</h4>
+    <div class="diag-ctx" id="diagCtx"></div>
+    <div class="diag-body" id="diagBody"></div>
+    <div style="display:flex;gap:8px;margin-top:16px">
+      <button class="ghost" id="diagCopy" style="flex:1;padding:10px">로그 복사</button>
+      <button class="primary" id="diagClose" style="padding:10px 18px">닫기</button>
+    </div>
+  </div>
+</div>
+
 <script>
 "use strict";
 
@@ -482,7 +514,9 @@ const S = {
   mouse: { dx:0, dy:0, left:false, right:false },
   hotbar: 1,
   locked: false,
-  timers: []
+  timers: [],
+  diag: [],                // 진단 로그 (상태 태그 클릭 시 표시)
+  lastError: null
 };
 
 const $  = (s) => document.querySelector(s);
@@ -500,7 +534,54 @@ function show(id){
 function setStatus(kind, text){
   const el = $("#status");
   el.className = "status" + (kind ? " " + kind : "");
+  el.classList.toggle("clickable", kind === "err");
   $("#statusText").textContent = text;
+}
+
+/* 진단 로그 — 상태 태그(특히 "오류")를 클릭하면 이 내용을 보여준다.
+   서버까지 도달했는지, 어떤 close code로 끊겼는지 등 원인 추적용. */
+function logDiag(kind, msg, detail){
+  const t = new Date();
+  const hh = String(t.getHours()).padStart(2,"0");
+  const mm = String(t.getMinutes()).padStart(2,"0");
+  const ss = String(t.getSeconds()).padStart(2,"0");
+  S.diag.push({ ts:`${hh}:${mm}:${ss}`, kind, msg, detail: detail || "" });
+  if (S.diag.length > 100) S.diag.shift();
+  if (kind === "error") S.lastError = { msg, detail: detail || "" };
+}
+
+const CLOSE_HINTS = {
+  1006: "네트워크 계층에서 비정상 종료. 터널이 내려갔거나 wss:// 주소가 잘못됐을 수 있습니다.",
+  4001: "액세스 키가 서버에서 거부됨. .env의 WM_TOKENS 값과 일치하는지 확인하세요.",
+  4008: "세션 시간(TTL)이 만료되어 서버가 정상 종료했습니다.",
+  4011: "게이트웨이는 살아 있으나 워커에 연결하지 못했습니다. 워커 프로세스를 확인하세요.",
+  4029: "동시 세션 한도 초과로 서버가 가득 찼습니다."
+};
+
+function openDiag(){
+  const box = $("#diagBody");
+  const rows = S.diag.slice().reverse().map(d => {
+    const cls = d.kind === "error" ? "derr" : (d.kind === "warn" ? "dwarn" : "dok");
+    const det = d.detail ? `<div class="ddetail">${escapeHtml(d.detail)}</div>` : "";
+    return `<div class="drow ${cls}"><span class="dts">${d.ts}</span>` +
+           `<div class="dmsg">${escapeHtml(d.msg)}${det}</div></div>`;
+  }).join("");
+  box.innerHTML = rows || '<div class="drow dok"><div class="dmsg">기록된 이벤트가 없습니다.</div></div>';
+
+  const ctx = [];
+  ctx.push(`모델: ${S.model ? S.model.id : "—"}`);
+  ctx.push(`서버: ${S.server || "—"}`);
+  ctx.push(`모드: ${S.mock ? "데모" : "실서버"}`);
+  ctx.push(`받은 프레임: ${S.frames}`);
+  if (location.protocol === "https:" && /^ws:\/\//i.test(S.server))
+    ctx.push("⚠ https 페이지에서 ws:// 사용 — 브라우저가 차단합니다 (wss:// 필요)");
+  $("#diagCtx").textContent = ctx.join("   ·   ");
+  $("#diagModal").classList.add("open");
+}
+
+function escapeHtml(s){
+  return String(s).replace(/[&<>"]/g, c =>
+    ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c]));
 }
 
 function overlay(title, text, opts){
@@ -613,18 +694,25 @@ function connect(m){
   if (!/^wss?:\/\//.test(base)) base = "wss://" + base;
 
   const url = `${base}/ws/${m.id}?token=${encodeURIComponent(S.key)}`;
+  logDiag("info", `연결 시도: ${base}/ws/${m.id}`);
   let ws;
-  try { ws = new WebSocket(url); } catch (e) { return fail("주소 형식이 올바르지 않습니다."); }
+  try { ws = new WebSocket(url); }
+  catch (e) { logDiag("error", "WebSocket 생성 실패", String(e)); return fail("주소 형식이 올바르지 않습니다."); }
   ws.binaryType = "arraybuffer";
   S.ws = ws;
 
   const guard = setTimeout(() => {
-    if (ws.readyState !== 1){ try{ ws.close(); }catch(e){} fail("서버 응답이 없습니다. 주소와 터널 상태를 확인하세요."); }
+    if (ws.readyState !== 1){
+      try{ ws.close(); }catch(e){}
+      logDiag("error", "연결 타임아웃(8초)", "소켓이 열리지 않았습니다. 터널이 떠 있는지, wss:// 주소가 맞는지 확인하세요.");
+      fail("서버 응답이 없습니다. 주소와 터널 상태를 확인하세요.");
+    }
   }, 8000);
 
   ws.onopen = () => {
     clearTimeout(guard);
     S.connected = true;
+    logDiag("info", "소켓 열림 → init 전송");
     setStatus("wait", "세션 요청");
     send({ type:"init", model:m.id, fps:S.tickHz });
 
@@ -632,6 +720,8 @@ function connect(m){
     // 보통 게이트웨이는 살아 있지만 워커가 안 떠 있을 때 발생한다.
     S.readyGuard = setTimeout(() => {
       try{ ws.close(); }catch(e){}
+      logDiag("error", "세션 시작 안 됨(20초)",
+        "소켓은 열렸지만 ready/queue가 오지 않았습니다. 게이트웨이는 살아 있으나 워커가 안 떠 있을 때 주로 발생합니다. 서버에서 .run/oasis.log 확인.");
       setStatus("err", "응답 없음");
       overlay("세션이 시작되지 않습니다",
         "서버에는 연결됐지만 20초 안에 세션이 열리지 않았습니다. " +
@@ -646,13 +736,16 @@ function connect(m){
     else { handleFrame(ev.data); }
   };
 
-  ws.onerror = () => { clearTimeout(guard); };
+  ws.onerror = () => { clearTimeout(guard); logDiag("warn", "WebSocket 오류 이벤트", "브라우저 콘솔(F12)에 net::ERR_ 메시지가 있는지 확인하세요."); };
 
   ws.onclose = (ev) => {
     clearTimeout(guard);
     clearTimeout(S.readyGuard);
     stopLoops();
     S.connected = false;
+    const hint = CLOSE_HINTS[ev.code] || "";
+    logDiag(ev.code >= 4000 || ev.code === 1006 ? "error" : "info",
+      `연결 종료 (code ${ev.code}${ev.reason ? ", " + ev.reason : ""})`, hint);
     if (ev.code === 4001) fail("액세스 키가 거부되었습니다.");
     else if (ev.code === 4029) fail("서버가 가득 찼습니다. 잠시 후 다시 시도하세요.");
     else if (ev.code === 4008) overlay("세션 시간 종료", "할당된 세션 시간이 끝났습니다.",
@@ -662,9 +755,13 @@ function connect(m){
   };
 }
 
-function fail(msg){
+function fail(msg, detail){
+  logDiag("error", msg, detail || "");
   setStatus("err", "오류");
-  overlay("연결 실패", msg, { spinner:false, button:"모델 목록으로", onClick: endSession });
+  const hasLog = S.diag.length > 0;
+  overlay("연결 실패", msg + (detail ? "\n\n" + detail : ""),
+    { spinner:false, button: hasLog ? "오류 상세 보기" : "모델 목록으로",
+      onClick: hasLog ? openDiag : endSession });
 }
 
 function send(obj){
@@ -690,7 +787,9 @@ function handleJson(msg){
       startLoops();
       break;
     case "error":
-      fail(msg.message || "서버 오류");
+      logDiag("error", "서버가 오류 보고", msg.detail || "");
+      fail(msg.message || "서버 오류",
+        msg.detail || "워커에서 추론 중 예외가 발생했습니다. 서버 .run/oasis.log 에서 전체 트레이스백을 확인하세요.");
       break;
     case "pong":
       break;
@@ -1056,6 +1155,36 @@ $("#setLogout").addEventListener("click", () => {
 });
 
 $("#ovlBtn").addEventListener("click", (e) => { /* onClick에서 처리 */ });
+
+// 상태 태그 클릭 → 진단 로그 (내용이 있을 때만)
+$("#status").addEventListener("click", () => {
+  if (S.diag.length) openDiag();
+});
+$("#diagClose").addEventListener("click", () => $("#diagModal").classList.remove("open"));
+$("#diagModal").addEventListener("click", (e) => {
+  if (e.target.id === "diagModal") $("#diagModal").classList.remove("open");
+});
+$("#diagCopy").addEventListener("click", () => {
+  const text = S.diag.map(d => `[${d.ts}] ${d.msg}${d.detail ? " — " + d.detail : ""}`).join("\n");
+  const ctx = $("#diagCtx").textContent;
+  const full = ctx + "\n\n" + text;
+  const btn = $("#diagCopy");
+  const done = () => { btn.textContent = "복사됨 ✓"; setTimeout(() => btn.textContent = "로그 복사", 1500); };
+  if (navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(full).then(done).catch(() => {});
+  } else {
+    const ta = document.createElement("textarea");
+    ta.value = full; document.body.appendChild(ta); ta.select();
+    try{ document.execCommand("copy"); done(); }catch(e){}
+    document.body.removeChild(ta);
+  }
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape"){
+    $("#diagModal").classList.remove("open");
+    $("#modal").classList.remove("open");
+  }
+});
 
 /* =========================================================
    11. 부트스트랩
