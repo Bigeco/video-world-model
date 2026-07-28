@@ -88,8 +88,64 @@ MINECRAFT_BUTTONS = [
 ]
 
 
+# ---------------------------------------------------------------------------
+# Oasis(open-oasis) 정확한 액션 포맷
+#
+# open-oasis/utils.py 의 ACTION_KEYS 순서와 정확히 일치해야 합니다. 순서·개수가
+# 어긋나면 모델이 엉뚱한 버튼을 눌린 것으로 해석해 화면이 무너집니다.
+# 이 25차원 벡터가 generate.py 의 one_hot_actions() 출력과 동일한 규약입니다.
+# ---------------------------------------------------------------------------
+
+OASIS_ACTION_KEYS = [
+    "inventory", "ESC",
+    "hotbar.1", "hotbar.2", "hotbar.3", "hotbar.4", "hotbar.5",
+    "hotbar.6", "hotbar.7", "hotbar.8", "hotbar.9",
+    "forward", "back", "left", "right",
+    "cameraX", "cameraY",
+    "jump", "sneak", "sprint", "swapHands", "attack", "use", "pickItem", "drop",
+]
+
+
+def oasis_vector(a: Action, sensitivity: float = 0.15) -> np.ndarray:
+    """
+    open-oasis 가 기대하는 25차원 액션 벡터. ACTION_KEYS 순서 그대로.
+
+    카메라 인코딩은 utils.one_hot_actions() 을 그대로 따릅니다:
+      - 브라우저 픽셀 delta → sensitivity 로 스케일 → ±20도 클램프
+      - 정규화 카메라 값 = degrees / 20  (즉 [-1, 1])
+    hotbar 는 선택된 슬롯 하나만 1인 원핫입니다.
+    """
+    cam_pitch = float(np.clip(a.dy * sensitivity, -20.0, 20.0)) / 20.0   # cameraX
+    cam_yaw = float(np.clip(a.dx * sensitivity, -20.0, 20.0)) / 20.0     # cameraY
+    slot = max(1, min(9, a.hotbar))
+
+    values = {
+        "inventory": float(a.held("KeyE")),
+        "ESC": 0.0,
+        "forward": float(a.held("KeyW", "ArrowUp")),
+        "back": float(a.held("KeyS", "ArrowDown")),
+        "left": float(a.held("KeyA", "ArrowLeft")),
+        "right": float(a.held("KeyD", "ArrowRight")),
+        "cameraX": cam_pitch,
+        "cameraY": cam_yaw,
+        "jump": float(a.held("Space")),
+        "sneak": float(a.held("ShiftLeft", "ShiftRight")),
+        "sprint": float(a.held("ControlLeft", "ControlRight")),
+        "swapHands": float(a.held("KeyF")),
+        "attack": float(a.left),
+        "use": float(a.right),
+        "pickItem": float(a.held("KeyX")),
+        "drop": float(a.held("KeyQ")),
+    }
+    for n in range(1, 10):
+        values[f"hotbar.{n}"] = 1.0 if slot == n else 0.0
+
+    return np.asarray([values[k] for k in OASIS_ACTION_KEYS], dtype=np.float32)
+
+
+# 하위호환용 별칭 (기존 13차원). 실제 Oasis 연결에는 oasis_vector 를 쓰세요.
 def minecraft_vector(a: Action, sensitivity: float = 0.15) -> np.ndarray:
-    """to_minecraft를 평탄한 float32 벡터로. 길이 = 버튼 11 + 카메라 2 = 13."""
+    """레거시 13차원 벡터. 실제 open-oasis 에는 oasis_vector(25차원)를 사용."""
     d = to_minecraft(a, sensitivity)
     buttons = [float(d[k]) for k in MINECRAFT_BUTTONS]
     return np.asarray(buttons + [d["camera"][0] / 20.0, d["camera"][1] / 20.0],
@@ -175,7 +231,7 @@ def to_atari(a: Action) -> int:
 
 
 MAPPERS = {
-    "oasis": minecraft_vector,
+    "oasis": oasis_vector,          # 25차원 VPT 포맷 (open-oasis 실제 규약)
     "diamond-csgo": csgo_vector,
     "diamond-atari": to_atari,
 }

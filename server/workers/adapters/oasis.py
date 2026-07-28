@@ -1,37 +1,51 @@
 """
-Oasis 어댑터 (Minecraft world model).
+Oasis 어댑터 — open-oasis (etched-ai) 실제 추론 코드에 맞춰 구현.
 
-체크포인트를 연결하는 지점은 아래 TODO 세 군데뿐입니다.
-가중치가 없거나 WM_DUMMY=1이면 자동으로 더미로 떨어집니다.
+이 파일은 저장소의 generate.py 를 **상호작용용 상태 루프**로 바꾼 것입니다.
+generate.py 는 액션 시퀀스 전체를 미리 받아 32프레임을 한 번에 만들어 video.mp4 로
+저장하는 오프라인 스크립트입니다. 우리는 매 틱 액션 하나를 받아 다음 프레임 하나만
+생성해야 하므로, 잠재(latent) 컨텍스트와 액션 히스토리를 self 에 들고 다니면서
+generate.py 의 diffusion-forcing 샘플링 루프를 프레임 단위로 돌립니다.
 
-Oasis 계열 모델의 공통 구조:
-  * 최근 N개 프레임을 VAE로 잠재(latent)로 인코딩해 컨텍스트로 유지
-  * 액션 시퀀스를 조건으로 다음 프레임 잠재를 diffusion으로 샘플링
-  * 디코딩해서 RGB 프레임 반환
-  * 컨텍스트 윈도우를 슬라이딩하며 자기회귀 반복
+전제:
+  * open-oasis 저장소가 PYTHONPATH 에 있어야 합니다 (Dockerfile 주석 참고).
+    거기서 dit, vae, utils 를 임포트합니다.
+  * 체크포인트 2개: oasis500m.safetensors (DiT), vit-l-20.safetensors (VAE).
+  * 시작 프레임(prompt) 이미지 1장. 저장소의 sample_data/sample_image_0.png 로 시작해도 됩니다.
 
-실시간성의 핵심은 **diffusion step 수**입니다. 학습 시 50 step이라도 추론은
-4~8 step으로 줄여야 20FPS가 나옵니다. WM_DIFFUSION_STEPS로 조절하세요.
+가중치가 없거나 WM_DUMMY=1 이면 더미로 폴백합니다.
+
+⚠ 실시간성 주의: generate.py 는 프레임당 ddim_steps(기본 10) 번, 매번 컨텍스트
+윈도우 전체에 대해 DiT forward 를 돕니다. 단일 GPU에서 360×640 · 20fps 는 그대로는
+어렵습니다. WM_DIFFUSION_STEPS 를 4~8 로 줄이고, 필요하면 해상도·컨텍스트를 낮추세요.
+자세한 튜닝은 server/README 의 Oasis 절 참고.
 """
 
 from __future__ import annotations
 
 import logging
 import os
-from collections import deque
 
 import numpy as np
 
-from ..common.actions import Action, minecraft_vector
+from ..common.actions import Action, oasis_vector
 from ..common.base import WorldModel
 
 log = logging.getLogger("oasis")
 
-CKPT = os.getenv("WM_OASIS_CKPT", "/weights/oasis500m.pt")
-VAE_CKPT = os.getenv("WM_OASIS_VAE", "/weights/vit-l-20.pt")
-CONTEXT = int(os.getenv("WM_CONTEXT", "16"))
-STEPS = int(os.getenv("WM_DIFFUSION_STEPS", "8"))
-DEVICE = os.getenv("WM_DEVICE", "cuda")
+OASIS_CKPT = os.getenv("WM_OASIS_CKPT", "/weights/oasis500m.safetensors")
+VAE_CKPT = os.getenv("WM_OASIS_VAE", "/weights/vit-l-20.safetensors")
+PROMPT_PATH = os.getenv("WM_OASIS_PROMPT", "/weights/prompt.png")
+DEVICE = os.getenv("WM_DEVICE", "cuda:0")
+
+# 학습 시 총 노이즈 레벨. generate.py 상수와 동일하게 유지.
+MAX_NOISE_LEVEL = 1000
+NOISE_ABS_MAX = 20.0
+STABILIZATION_LEVEL = 15
+
+# 실시간을 위한 조절 손잡이
+DDIM_STEPS = int(os.getenv("WM_DIFFUSION_STEPS", "8"))   # generate.py 기본 10
+SCALING_FACTOR = 0.07843137255                            # generate.py 와 동일
 
 
 class OasisWorldModel(WorldModel):
@@ -39,64 +53,140 @@ class OasisWorldModel(WorldModel):
     quality = int(os.getenv("WM_JPEG_QUALITY", "80"))
 
     def __init__(self) -> None:
-        import torch  # 지연 임포트 — 더미 경로에서는 torch가 필요 없다
+        import torch
+        from einops import rearrange
+        from safetensors.torch import load_model
+
+        # open-oasis 저장소 모듈
+        from dit import DiT_models
+        from vae import VAE_models
+        from utils import load_prompt, sigmoid_beta_schedule
 
         self.torch = torch
+        self.rearrange = rearrange
+        self._load_prompt = load_prompt
         self.device = torch.device(DEVICE)
 
-        # ------------------------------------------------------------------
-        # TODO(1): 모델과 VAE 로드
-        # ------------------------------------------------------------------
-        # from oasis.models import DiT, VAE          # 실제 리포의 임포트로 교체
-        # self.model = DiT.from_pretrained(CKPT).to(self.device).eval()
-        # self.vae   = VAE.from_pretrained(VAE_CKPT).to(self.device).eval()
-        # self.model = self.model.to(memory_format=torch.channels_last).half()
-        raise NotImplementedError(
-            "Oasis 체크포인트를 연결하세요 (oasis.py TODO 1~3). "
-            "먼저 파이프라인만 확인하려면 WM_DUMMY=1로 실행하세요."
-        )
+        # --- DiT 로드 (generate.py 그대로) ---
+        log.info("DiT 로딩: %s", OASIS_CKPT)
+        model = DiT_models["DiT-S/2"]()
+        if OASIS_CKPT.endswith(".pt"):
+            model.load_state_dict(torch.load(OASIS_CKPT, weights_only=True), strict=False)
+        else:
+            load_model(model, OASIS_CKPT)
+        self.model = model.to(self.device).eval()
+
+        # --- VAE 로드 ---
+        log.info("VAE 로딩: %s", VAE_CKPT)
+        vae = VAE_models["vit-l-20-shallow-encoder"]()
+        if VAE_CKPT.endswith(".pt"):
+            vae.load_state_dict(torch.load(VAE_CKPT, weights_only=True))
+        else:
+            load_model(vae, VAE_CKPT)
+        self.vae = vae.to(self.device).eval()
+
+        # --- diffusion 스케줄 (generate.py 그대로) ---
+        self.noise_range = torch.linspace(-1, MAX_NOISE_LEVEL - 1, DDIM_STEPS + 1)
+        betas = sigmoid_beta_schedule(MAX_NOISE_LEVEL).float().to(self.device)
+        alphas = 1.0 - betas
+        acp = torch.cumprod(alphas, dim=0)
+        self.alphas_cumprod = rearrange(acp, "T -> T 1 1 1")
+
+        self.max_frames = getattr(self.model, "max_frames", 16)
+        self._prompt_latent = None      # 시작 프레임 잠재 (reset 때 캐시)
+        log.info("Oasis 준비 완료. ddim_steps=%d max_frames=%d", DDIM_STEPS, self.max_frames)
 
     # ----------------------------------------------------------------------
 
+    def _encode_prompt(self):
+        """시작 프레임 1장을 잠재로 인코딩. reset 마다 재사용하도록 캐시."""
+        torch = self.torch
+        rearrange = self.rearrange
+        if self._prompt_latent is not None:
+            return self._prompt_latent.clone()
+
+        # (1, 1, C, 360, 640), [0,1]
+        x = self._load_prompt(PROMPT_PATH, n_prompt_frames=1).to(self.device)
+        self._H, self._W = x.shape[-2:]
+        x = rearrange(x, "b t c h w -> (b t) c h w")
+        with torch.no_grad(), torch.autocast("cuda", dtype=torch.half):
+            x = self.vae.encode(x * 2 - 1).mean * SCALING_FACTOR
+        x = rearrange(x, "(b t) (h w) c -> b t c h w", t=1,
+                      h=self._H // self.vae.patch_size, w=self._W // self.vae.patch_size)
+        self._prompt_latent = x
+        return x.clone()
+
     def reset(self) -> np.ndarray:
         torch = self.torch
-
-        # ------------------------------------------------------------------
-        # TODO(2): 시작 프레임으로 컨텍스트 초기화
-        # ------------------------------------------------------------------
-        # 대부분의 구현은 실제 게임 스크린샷 한 장을 seed로 씁니다.
-        # 순수 노이즈로 시작하면 몇 초간 형태가 잡히지 않습니다.
-        #
-        # seed = load_seed_image()                       # HWC uint8
-        # with torch.no_grad():
-        #     latent = self.vae.encode(self._to_tensor(seed)).latent_dist.mode()
-        # self.latents  = deque([latent] * CONTEXT, maxlen=CONTEXT)
-        # self.actions  = deque([torch.zeros(1, 13, device=self.device)] * CONTEXT,
-        #                       maxlen=CONTEXT)
-        # return seed
-        raise NotImplementedError
+        # 잠재 컨텍스트를 시작 프레임 하나로 초기화
+        self.x = self._encode_prompt()                              # (1, 1, c, h, w)
+        # 첫 프레임에 대응하는 액션(전부 0)
+        self.actions = torch.zeros(
+            (1, 1, len(oasis_vector(Action()))), device=self.device
+        )
+        self.frame_idx = 0
+        return self._decode_last()
 
     def step(self, action: Action) -> np.ndarray:
         torch = self.torch
+        rearrange = self.rearrange
+        acp = self.alphas_cumprod
 
-        # 브라우저 입력 → 13차원 액션 벡터 (버튼 11 + 카메라 2)
-        vec = minecraft_vector(action)
-        act = torch.from_numpy(vec).to(self.device).unsqueeze(0)
+        # 1) 액션 히스토리에 이번 입력 추가 (25차원)
+        vec = torch.from_numpy(oasis_vector(action)).to(self.device)
+        self.actions = torch.cat([self.actions, vec.view(1, 1, -1)], dim=1)
 
-        # ------------------------------------------------------------------
-        # TODO(3): 다음 프레임 잠재를 샘플링하고 디코딩
-        # ------------------------------------------------------------------
-        # self.actions.append(act)
-        # with torch.no_grad(), torch.autocast("cuda", dtype=torch.float16):
-        #     ctx_latents = torch.stack(list(self.latents), dim=1)
-        #     ctx_actions = torch.stack(list(self.actions), dim=1)
-        #     next_latent = self.model.sample(
-        #         context=ctx_latents, actions=ctx_actions, num_steps=STEPS,
-        #     )
-        #     frame = self.vae.decode(next_latent).sample
-        # self.latents.append(next_latent)
-        # return frame[0].float().cpu().numpy()        # CHW float, 런타임이 정규화
-        raise NotImplementedError
+        # 2) 새 프레임 자리에 노이즈를 붙인다 (generate.py 와 동일)
+        i = self.x.shape[1]                          # 새로 만들 프레임의 인덱스
+        chunk = torch.randn((1, 1, *self.x.shape[-3:]), device=self.device)
+        chunk = torch.clamp(chunk, -NOISE_ABS_MAX, NOISE_ABS_MAX)
+        self.x = torch.cat([self.x, chunk], dim=1)
+        start = max(0, i + 1 - self.max_frames)      # 슬라이딩 윈도우
+
+        # 3) DDIM 역방향 샘플링 (generate.py 루프를 프레임 1개에 대해 수행)
+        for nidx in reversed(range(1, DDIM_STEPS + 1)):
+            t_ctx = torch.full((1, i), STABILIZATION_LEVEL - 1, dtype=torch.long, device=self.device)
+            t = torch.full((1, 1), self.noise_range[nidx], dtype=torch.long, device=self.device)
+            t_next = torch.full((1, 1), self.noise_range[nidx - 1], dtype=torch.long, device=self.device)
+            t_next = torch.where(t_next < 0, t, t_next)
+            t = torch.cat([t_ctx, t], dim=1)
+            t_next = torch.cat([t_ctx, t_next], dim=1)
+
+            x_curr = self.x[:, start:].clone()
+            t = t[:, start:]
+            t_next = t_next[:, start:]
+
+            with torch.no_grad(), torch.autocast("cuda", dtype=torch.half):
+                v = self.model(x_curr, t, self.actions[:, start : i + 1])
+
+            x_start = acp[t].sqrt() * x_curr - (1 - acp[t]).sqrt() * v
+            x_noise = ((1 / acp[t]).sqrt() * x_curr - x_start) / (1 / acp[t] - 1).sqrt()
+            alpha_next = acp[t_next].clone()
+            alpha_next[:, :-1] = torch.ones_like(alpha_next[:, :-1])
+            if nidx == 1:
+                alpha_next[:, -1:] = torch.ones_like(alpha_next[:, -1:])
+            x_pred = alpha_next.sqrt() * x_start + x_noise * (1 - alpha_next).sqrt()
+            self.x[:, -1:] = x_pred[:, -1:]
+
+        # 4) 컨텍스트가 너무 길어지면 앞을 버려 계산량을 묶어둔다
+        if self.x.shape[1] > self.max_frames:
+            drop = self.x.shape[1] - self.max_frames
+            self.x = self.x[:, drop:]
+            self.actions = self.actions[:, drop:]
+
+        self.frame_idx += 1
+        return self._decode_last()
+
+    def _decode_last(self) -> np.ndarray:
+        """마지막 잠재 프레임 1장만 디코딩해서 RGB 로 반환."""
+        torch = self.torch
+        rearrange = self.rearrange
+        last = self.x[:, -1:]                                    # (1, 1, c, h, w)
+        z = rearrange(last, "b t c h w -> (b t) (h w) c")
+        with torch.no_grad():
+            img = (self.vae.decode(z / SCALING_FACTOR) + 1) / 2  # (1, c, H, W), [0,1]
+        img = torch.clamp(img, 0, 1)[0]
+        return img.float().cpu().numpy()                         # CHW, 런타임이 정규화
 
     def close(self) -> None:
         if getattr(self, "torch", None) is not None:
@@ -104,16 +194,19 @@ class OasisWorldModel(WorldModel):
 
 
 def build(model_id: str) -> WorldModel:
-    """워커 팩토리. 가중치가 없으면 더미로 자동 폴백."""
+    """워커 팩토리. 가중치가 없거나 WM_DUMMY=1 이면 더미로 폴백."""
     if os.getenv("WM_DUMMY") == "1":
         from .dummy import make_dummy
         log.warning("WM_DUMMY=1 — 더미 모델로 기동합니다 (실제 추론 아님)")
         return make_dummy(model_id)
 
-    if not os.path.exists(CKPT):
+    missing = [p for p in (OASIS_CKPT, VAE_CKPT) if not os.path.exists(p)]
+    if missing:
         raise FileNotFoundError(
-            f"체크포인트를 찾을 수 없습니다: {CKPT}\n"
-            f"  - 가중치를 받아 WM_OASIS_CKPT에 경로를 지정하거나\n"
-            f"  - 파이프라인 확인만 하려면 WM_DUMMY=1로 실행하세요."
+            "체크포인트를 찾을 수 없습니다: " + ", ".join(missing) + "\n"
+            "  huggingface-cli download Etched/oasis-500m oasis500m.safetensors\n"
+            "  huggingface-cli download Etched/oasis-500m vit-l-20.safetensors\n"
+            "  로 받아 WM_OASIS_CKPT / WM_OASIS_VAE 에 경로를 지정하세요.\n"
+            "  파이프라인만 확인하려면 WM_DUMMY=1 로 실행하세요."
         )
     return OasisWorldModel()
