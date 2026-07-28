@@ -48,6 +48,42 @@ DDIM_STEPS = int(os.getenv("WM_DIFFUSION_STEPS", "8"))   # generate.py 기본 10
 SCALING_FACTOR = 0.07843137255                            # generate.py 와 동일
 
 
+# ---------------------------------------------------------------------------
+# open-oasis utils.py 를 임포트하지 않는다.
+#
+# 그 파일은 맨 위에서 `from torchvision.io import read_image, read_video` 를 하는데,
+# torchvision 0.28+ 에서 read_video 가 제거되어 import 자체가 실패한다. 우리는
+# 비디오가 아니라 이미지 한 장을 시작 프레임으로 쓰므로 read_video 가 필요 없다.
+# 그래서 필요한 두 함수(이미지 로더 · 노이즈 스케줄)를 여기 직접 둔다.
+# ---------------------------------------------------------------------------
+
+def _sigmoid_beta_schedule(timesteps, start=-3, end=3, tau=1):
+    """utils.sigmoid_beta_schedule 와 동일 (순수 torch, torchvision 무관)."""
+    import torch
+    steps = timesteps + 1
+    t = torch.linspace(0, timesteps, steps, dtype=torch.float64) / timesteps
+    v_start = torch.tensor(start / tau).sigmoid()
+    v_end = torch.tensor(end / tau).sigmoid()
+    acp = (-((t * (end - start) + start) / tau).sigmoid() + v_end) / (v_end - v_start)
+    acp = acp / acp[0]
+    betas = 1 - (acp[1:] / acp[:-1])
+    return torch.clip(betas, 0, 0.999)
+
+
+def _load_prompt_image(path, size=(360, 640)):
+    """
+    시작 프레임 이미지 1장 → (1, 1, C, H, W) float [0,1].
+    utils.load_prompt 의 이미지 경로만 떼어냈다. read_video 를 건드리지 않는다.
+    """
+    from torchvision.io import read_image
+    from torchvision.transforms.functional import resize
+    from einops import rearrange
+    img = read_image(path)[:3]                 # c h w uint8 (알파 있으면 버림)
+    img = resize(img, list(size))              # 360×640 로 맞춤
+    img = rearrange(img, "c h w -> 1 1 c h w").float() / 255.0
+    return img
+
+
 class OasisWorldModel(WorldModel):
     fps = int(os.getenv("WM_FPS_OASIS", "20"))
     quality = int(os.getenv("WM_JPEG_QUALITY", "80"))
@@ -57,14 +93,12 @@ class OasisWorldModel(WorldModel):
         from einops import rearrange
         from safetensors.torch import load_model
 
-        # open-oasis 저장소 모듈
+        # open-oasis 저장소 모듈 (utils 는 임포트하지 않는다 — 위 주석 참고)
         from dit import DiT_models
         from vae import VAE_models
-        from utils import load_prompt, sigmoid_beta_schedule
 
         self.torch = torch
         self.rearrange = rearrange
-        self._load_prompt = load_prompt
         self.device = torch.device(DEVICE)
 
         # --- DiT 로드 (generate.py 그대로) ---
@@ -87,7 +121,7 @@ class OasisWorldModel(WorldModel):
 
         # --- diffusion 스케줄 (generate.py 그대로) ---
         self.noise_range = torch.linspace(-1, MAX_NOISE_LEVEL - 1, DDIM_STEPS + 1)
-        betas = sigmoid_beta_schedule(MAX_NOISE_LEVEL).float().to(self.device)
+        betas = _sigmoid_beta_schedule(MAX_NOISE_LEVEL).float().to(self.device)
         alphas = 1.0 - betas
         acp = torch.cumprod(alphas, dim=0)
         self.alphas_cumprod = rearrange(acp, "T -> T 1 1 1")
@@ -106,7 +140,7 @@ class OasisWorldModel(WorldModel):
             return self._prompt_latent.clone()
 
         # (1, 1, C, 360, 640), [0,1]
-        x = self._load_prompt(PROMPT_PATH, n_prompt_frames=1).to(self.device)
+        x = _load_prompt_image(PROMPT_PATH).to(self.device)
         self._H, self._W = x.shape[-2:]
         x = rearrange(x, "b t c h w -> (b t) c h w")
         with torch.no_grad(), torch.autocast("cuda", dtype=torch.half):
