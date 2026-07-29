@@ -217,7 +217,7 @@ class OasisWorldModel(WorldModel):
         rearrange = self.rearrange
         last = self.x[:, -1:]                                    # (1, 1, c, h, w)
         z = rearrange(last, "b t c h w -> (b t) (h w) c")
-        with torch.no_grad():
+        with torch.no_grad(), torch.autocast("cuda", dtype=torch.half):
             img = (self.vae.decode(z / SCALING_FACTOR) + 1) / 2  # (1, c, H, W), [0,1]
         img = torch.clamp(img, 0, 1)[0]
         return img.float().cpu().numpy()                         # CHW, 런타임이 정규화
