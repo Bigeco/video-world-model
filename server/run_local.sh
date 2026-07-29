@@ -159,6 +159,15 @@ stop_all
 export PYTHONPATH="$PWD:${PYTHONPATH:-}"
 export PYTHONUNBUFFERED=1        # 로그가 즉시 파일에 찍히도록
 
+# 유저 site-packages(~/.local)를 무시한다.
+# 여기에 활성 환경과 다른 버전의 torch 등이 깔려 있으면 그게 섞여 들어와
+# "드라이버가 너무 오래됨"(cu130 vs 드라이버) 같은 충돌을 일으킨다.
+# 이걸 켜면 워커는 오직 현재 환경(conda/venv)의 패키지만 쓴다.
+# 끄려면 WM_ALLOW_USERSITE=1 로 실행.
+if [ "${WM_ALLOW_USERSITE:-0}" != "1" ]; then
+  export PYTHONNOUSERSITE=1
+fi
+
 # 포트가 뜰 때까지 대기. 모델 로딩이 오래 걸릴 수 있어 넉넉히 준다.
 wait_up() {  # wait_up <이름> <포트> <최대초>
   local name=$1 port=$2 limit=${3:-60} i
