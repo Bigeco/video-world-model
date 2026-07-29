@@ -62,3 +62,4 @@ recordings/
 # 외부 바이너리·저장소 (리포 루트 기준)
 /bin/
 /models/
+/playground/

@@ -103,7 +103,35 @@
   /* ---------- model picker ---------- */
   #picker{padding:44px 0 80px}
   .ptitle{font-size:24px;margin:0 0 6px;letter-spacing:-.025em}
-  .psub{color:var(--fg-dim);font-size:14px;margin:0 0 32px}
+  .psub{color:var(--fg-dim);font-size:14px;margin:0 0 24px}
+
+  /* ---------- 모델 검색 / 정렬 / 필터 ---------- */
+  .toolbar{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:14px}
+  .search{
+    flex:1;min-width:200px;padding:9px 13px;border-radius:9px;
+    background:var(--panel);border:1px solid var(--line);color:var(--fg);font-size:13.5px;
+  }
+  .search::placeholder{color:var(--fg-faint)}
+  .search:focus,.selectbox:focus{outline:none;border-color:var(--accent)}
+  .selectbox{
+    padding:9px 13px;border-radius:9px;background:var(--panel);
+    border:1px solid var(--line);color:var(--fg);font-size:13px;
+  }
+  .filtergroups{display:flex;flex-wrap:wrap;gap:18px;margin-bottom:26px}
+  .fgroup{display:flex;align-items:center;flex-wrap:wrap;gap:7px}
+  .fgroup .flabel{font-size:11.5px;color:var(--fg-faint);margin-right:2px;
+    font-family:var(--mono);letter-spacing:.02em}
+  .fgroup .chipset{display:flex;flex-wrap:wrap;gap:7px}
+  .fchip{
+    font-size:12px;padding:5px 11px;border-radius:99px;background:var(--panel);
+    border:1px solid var(--line);color:var(--fg-dim);transition:.13s;
+  }
+  .fchip:hover{border-color:#39405a;color:var(--fg)}
+  .fchip.active{background:var(--accent);border-color:var(--accent);color:#0a0b0f;font-weight:600}
+  .emptyHint{
+    color:var(--fg-faint);font-size:13.5px;padding:40px 0;text-align:center;
+    border:1px dashed var(--line);border-radius:14px;
+  }
   .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(310px,1fr));gap:16px}
   .card{
     background:var(--panel);border:1px solid var(--line);border-radius:14px;
@@ -277,6 +305,28 @@
   <div class="wrap">
     <h2 class="ptitle">모델 선택</h2>
     <p class="psub">실행할 world model을 고르세요. 세션당 GPU 한 장을 점유하므로 대기열이 생길 수 있습니다.</p>
+
+    <div class="toolbar">
+      <input type="search" id="searchModel" class="search" placeholder="모델 이름 검색…" autocomplete="off">
+      <select id="sortModel" class="selectbox">
+        <option value="default">기본 순서</option>
+        <option value="paper-desc">논문 발표 최신순</option>
+        <option value="paper-asc">논문 발표 오래된순</option>
+        <option value="size-desc">모델 크기 큰순</option>
+        <option value="size-asc">모델 크기 작은순</option>
+      </select>
+    </div>
+    <div class="filtergroups">
+      <div class="fgroup">
+        <span class="flabel">TASK</span>
+        <div id="taskChips" class="chipset"></div>
+      </div>
+      <div class="fgroup">
+        <span class="flabel">SIZE</span>
+        <div id="sizeChips" class="chipset"></div>
+      </div>
+    </div>
+
     <div class="grid" id="grid"></div>
   </div>
 </section>
@@ -410,6 +460,8 @@ const MODELS = [
     org: "Decart × Etched · 2024",
     desc: "프레임 단위 액션 조건부 diffusion transformer. 키·마우스 입력을 받아 Minecraft 영상을 실시간으로 자기회귀 생성합니다.",
     specs: ["500M / 7B", "360×640", "~20 FPS", "open weights"],
+    sizeM: 500,              // 이 서버가 실제로 서빙하는 건 500M 버전
+    paperDate: "2024-10",    // Oasis 공개 (Decart/Etched)
     pointerLock: true,
     palette: ["#5b8c3a", "#7cb342", "#8d6e63", "#6d4c41", "#90caf9"],
     keys: [
@@ -438,6 +490,8 @@ const MODELS = [
     org: "Alonso et al. · NeurIPS 2024",
     desc: "DIffusion As a Model Of eNvironment Dreams. EDM 기반 diffusion world model로, CS:GO Dust II 플레이 영상을 학습해 상호작용 가능한 환경을 만듭니다.",
     specs: ["381M", "280×150", "~10 FPS", "open source"],
+    sizeM: 381,
+    paperDate: "2024-05",    // arXiv 2405.12399
     pointerLock: true,
     palette: ["#c8b18a", "#a1875f", "#6b5b4a", "#3e3730", "#e0d6c3"],
     keys: [
@@ -464,6 +518,8 @@ const MODELS = [
     org: "Alonso et al. · NeurIPS 2024",
     desc: "동일 아키텍처의 Atari 버전. 저해상도지만 훨씬 가볍기 때문에 지연 테스트나 다중 세션 부하 실험에 적합합니다.",
     specs: ["~50M", "64×64", "~30 FPS", "open source"],
+    sizeM: 50,
+    paperDate: "2024-05",    // arXiv 2405.12399 (DIAMOND 논문, CS:GO와 동일)
     pointerLock: false,
     palette: ["#1a237e", "#d81b60", "#fdd835", "#00acc1", "#eceff1"],
     keys: [
@@ -603,12 +659,86 @@ function overlay(title, text, opts){
 function hideOverlay(){ $("#ovl").classList.add("hidden"); }
 
 /* =========================================================
-   4. 모델 카드 렌더링 + 썸네일 프리뷰
+   4. 모델 검색 / 정렬 / 필터 / 카드 렌더링
    ========================================================= */
+const SIZE_BUCKETS = [
+  { key: "lt100",    label: "< 100M",     test: n => n != null && n < 100 },
+  { key: "100-500",  label: "100M – 500M", test: n => n != null && n >= 100 && n < 500 },
+  { key: "500-1000", label: "500M – 1B",  test: n => n != null && n >= 500 && n < 1000 },
+  { key: "gte1000",  label: "≥ 1B",       test: n => n != null && n >= 1000 },
+  { key: "unknown",  label: "미정",        test: n => n == null },
+];
+
+// 검색어 / 선택된 task / 선택된 크기 구간 / 정렬 기준. 전부 비어 있으면 전체 표시.
+const F = { q: "", tasks: new Set(), sizes: new Set(), sort: "default" };
+
+function sizeBucketOf(m){
+  return SIZE_BUCKETS.find(b => b.test(m.sizeM)) || SIZE_BUCKETS[SIZE_BUCKETS.length - 1];
+}
+
+function passesFilter(m){
+  if (m.soon) return true;   // "추가 예정" 카드는 검색·필터와 무관하게 항상 노출
+  if (F.q && !`${m.name} ${m.tag} ${m.org}`.toLowerCase().includes(F.q)) return false;
+  if (F.tasks.size && !F.tasks.has(m.tag)) return false;
+  if (F.sizes.size && !F.sizes.has(sizeBucketOf(m).key)) return false;
+  return true;
+}
+
+function sortedModels(list){
+  const arr = list.slice();
+  const soonLast = (a, b) => (a.soon ? 1 : 0) - (b.soon ? 1 : 0);
+  const cmp = {
+    "paper-asc":  (a, b) => (a.paperDate || "9999").localeCompare(b.paperDate || "9999"),
+    "paper-desc": (a, b) => (b.paperDate || "0000").localeCompare(a.paperDate || "0000"),
+    "size-asc":   (a, b) => (a.sizeM ?? Infinity) - (b.sizeM ?? Infinity),
+    "size-desc":  (a, b) => (b.sizeM ?? -Infinity) - (a.sizeM ?? -Infinity),
+  }[F.sort];
+  if (cmp) arr.sort((a, b) => soonLast(a, b) || cmp(a, b));
+  else arr.sort(soonLast);   // "기본 순서" — 원래 배열 순서, soon만 맨 뒤로
+  return arr;
+}
+
+function buildChips(container, items, selectedSet){
+  container.innerHTML = "";
+  items.forEach(({ key, label }) => {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "fchip" + (selectedSet.has(key) ? " active" : "");
+    chip.textContent = label;
+    chip.addEventListener("click", () => {
+      if (selectedSet.has(key)) selectedSet.delete(key); else selectedSet.add(key);
+      buildChips(container, items, selectedSet);
+      buildCards();
+    });
+    container.appendChild(chip);
+  });
+}
+
+function buildFilterUI(){
+  const tasks = [...new Set(MODELS.filter(m => !m.soon).map(m => m.tag))]
+    .map(t => ({ key: t, label: t }));
+  buildChips($("#taskChips"), tasks, F.tasks);
+  buildChips($("#sizeChips"), SIZE_BUCKETS.map(b => ({ key: b.key, label: b.label })), F.sizes);
+}
+
+$("#searchModel").addEventListener("input", (e) => {
+  F.q = e.target.value.trim().toLowerCase();
+  buildCards();
+});
+$("#sortModel").addEventListener("change", (e) => {
+  F.sort = e.target.value;
+  buildCards();
+});
+
 function buildCards(){
   const g = $("#grid");
   g.innerHTML = "";
-  MODELS.forEach(m => {
+  const list = sortedModels(MODELS.filter(passesFilter));
+  if (!list.length){
+    g.innerHTML = '<div class="emptyHint">조건에 맞는 모델이 없습니다. 검색어나 필터를 조정해보세요.</div>';
+    return;
+  }
+  list.forEach(m => {
     const card = document.createElement("div");
     card.className = "card" + (m.soon ? " soon" : "");
     card.innerHTML = `
@@ -932,6 +1062,10 @@ function startLoops(){
     } else {
       $("#mTime").textContent = "∞";
     }
+
+    // 서버가 이 왕복 지연에서 자기가 잰 inference/encode 시간을 빼면
+    // "웹 전송" 구간만 근사할 수 있다 (stats.json의 network_estimate_mean_ms).
+    if (!S.mock && S.latency !== null) send({ type:"client_metric", rtt: S.latency, fps: S.fpsWindow.length });
   }, 250));
 }
 function stopLoops(){ S.timers.forEach(clearInterval); S.timers = []; }
@@ -1116,6 +1250,13 @@ $("#btnShot").addEventListener("click", () => {
   a.download = `${S.model ? S.model.id : "frame"}-${Date.now()}.png`;
   a.href = $("#view").toDataURL("image/png");
   a.click();
+
+  // 서버 쪽에도 원본 해상도 프레임 + 그때까지의 지연 통계를 저장해달라고 요청.
+  // playground/<model>/<세션 시작 시각>/ 아래 frame_*.png + stats.json으로 남는다.
+  if (!S.mock && S.ws && S.ws.readyState === 1){
+    send({ type:"save_frame" });
+    logDiag("info", "서버에 프레임 저장 요청 (save_frame)");
+  }
 });
 
 $("#btnSettings").addEventListener("click", () => {
@@ -1189,6 +1330,7 @@ document.addEventListener("keydown", (e) => {
 /* =========================================================
    11. 부트스트랩
    ========================================================= */
+buildFilterUI();
 buildCards();
 $("#inServer").value = S.server;
 if (S.key && S.server){

@@ -24,6 +24,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from .actions import NEUTRAL, Action
 from .base import WorldModel
 from .encode import BACKEND, encode_jpeg, pack_frame
+from .stats import SessionStats
 
 log = logging.getLogger("worker")
 
@@ -34,6 +35,7 @@ class SessionInput:
     def __init__(self) -> None:
         self.current: Action = NEUTRAL
         self.reset_requested = False
+        self.save_frame_requested = False
 
     def apply(self, msg: dict) -> None:
         kind = msg.get("type")
@@ -103,6 +105,9 @@ def create_app(factory: ModelFactory, default_model: str) -> FastAPI:
         await ws.accept()
         model_id = default_model
         inputs = SessionInput()
+        # reader가 시작하자마자 도착하는 action도 놓치지 않도록 미리 만들어둔다.
+        # model_id가 select/init으로 바뀌면 아래에서 stats.model_id도 맞춰준다.
+        stats: Optional[SessionStats] = SessionStats(model_id)
         # 세션당 스레드 1개. 추론은 여기서 돌고 이벤트 루프는 자유롭게 둔다.
         pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="infer")
         stop = asyncio.Event()
@@ -116,12 +121,21 @@ def create_app(factory: ModelFactory, default_model: str) -> FastAPI:
                         msg = json.loads(raw)
                     except json.JSONDecodeError:
                         continue
-                    if msg.get("type") == "select":
+                    kind = msg.get("type")
+                    if kind == "select":
                         model_id = msg.get("model") or default_model
-                    elif msg.get("type") == "init":
+                    elif kind == "init":
                         model_id = msg.get("model") or model_id
+                    elif kind == "save_frame":
+                        inputs.save_frame_requested = True
+                    elif kind == "client_metric":
+                        rtt = msg.get("rtt")
+                        if stats is not None and isinstance(rtt, (int, float)) and rtt > 0:
+                            stats.log_client_rtt(float(rtt))
                     else:
                         inputs.apply(msg)
+                        if kind == "action" and stats is not None:
+                            stats.log_action(Action.from_json(msg))
             except (WebSocketDisconnect, RuntimeError):
                 pass
             finally:
@@ -134,29 +148,45 @@ def create_app(factory: ModelFactory, default_model: str) -> FastAPI:
             await asyncio.sleep(0.05)
             model = await get_model(model_id)
             loop = asyncio.get_running_loop()
+            stats.model_id = model_id     # select/init으로 바뀌었을 수 있으니 최종값으로 맞춘다
 
+            t0 = time.monotonic()
             frame = await loop.run_in_executor(pool, model.reset)
+            stats.log_infer((time.monotonic() - t0) * 1000)
             frame_id = 0
             ack = 0
             period = 1.0 / max(1, model.fps)
             next_at = time.monotonic()
 
             while not stop.is_set():
+                t0 = time.monotonic()
                 jpeg = await loop.run_in_executor(pool, encode_jpeg, frame, model.quality)
+                stats.log_encode((time.monotonic() - t0) * 1000)
                 try:
                     await ws.send_bytes(pack_frame(frame_id, ack, jpeg))
                 except (WebSocketDisconnect, RuntimeError):
                     break
                 frame_id += 1
+                stats.frame_count = frame_id
+
+                if inputs.save_frame_requested:
+                    inputs.save_frame_requested = False
+                    path = stats.save_frame(frame)
+                    stats.write()
+                    log.info("프레임 저장 model=%s path=%s", model_id, path)
 
                 if inputs.reset_requested:
                     inputs.reset_requested = False
+                    t0 = time.monotonic()
                     frame = await loop.run_in_executor(pool, model.reset)
+                    stats.log_infer((time.monotonic() - t0) * 1000)
                     continue
 
                 action = inputs.take()
                 ack = action.seq
+                t0 = time.monotonic()
                 frame = await loop.run_in_executor(pool, model.step, action)
+                stats.log_infer((time.monotonic() - t0) * 1000)
 
                 # 페이싱: 추론이 목표 FPS보다 빠를 때만 쉰다.
                 next_at += period
@@ -176,6 +206,12 @@ def create_app(factory: ModelFactory, default_model: str) -> FastAPI:
             stop.set()
             reader_task.cancel()
             pool.shutdown(wait=False)
+            if stats is not None and (stats.frame_count or stats.actions):
+                try:
+                    path = stats.write()
+                    log.info("세션 통계 저장 model=%s path=%s", model_id, path)
+                except Exception:
+                    log.exception("세션 통계 저장 실패 model=%s", model_id)
             try:
                 await ws.close()
             except Exception:
