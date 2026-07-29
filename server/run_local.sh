@@ -156,7 +156,6 @@ else
 fi
 
 stop_all
-export PYTHONPATH="$PWD:${PYTHONPATH:-}"
 export PYTHONUNBUFFERED=1        # 로그가 즉시 파일에 찍히도록
 
 # 유저 site-packages(~/.local)를 무시한다.
@@ -192,17 +191,23 @@ report_fail() {  # report_fail <이름>
 }
 
 # --- 워커 -----------------------------------------------------------------
-launch() {  # launch <이름> <포트> <WM_MODEL> <기본모델> <GPU>
-  local name=$1 port=$2 adapter=$3 default=$4 gpu=$5
-  echo "기동: $name  포트 $port  GPU $gpu"
+# PYTHONPATH는 워커마다 따로 준다 (전역으로 export하지 않는다).
+# 모델 저장소(open-oasis, DIAMOND 등)는 서로 dit.py/utils.py처럼 흔한 이름의
+# 모듈을 가질 수 있어서, 두 저장소를 동시에 PYTHONPATH에 올리면 워커마다
+# 어느 쪽이 로드될지 뒤섞일 위험이 있다. 워커는 어차피 별도 프로세스로 뜨므로
+# 각자 자기 모델 저장소만 보게 한다.
+launch() {  # launch <이름> <포트> <WM_MODEL> <기본모델> <GPU> <모델저장소경로(옵션)>
+  local name=$1 port=$2 adapter=$3 default=$4 gpu=$5 repo=${6:-}
+  echo "기동: $name  포트 $port  GPU $gpu${repo:+  저장소 $repo}"
   CUDA_VISIBLE_DEVICES="$gpu" \
   WM_MODEL="$adapter" WM_DEFAULT_MODEL="$default" WM_PORT="$port" \
+  PYTHONPATH="$PWD${repo:+:$repo}" \
     "$PY" -m workers.run > "$RUN_DIR/$name.log" 2>&1 &
   echo $! > "$RUN_DIR/$name.pid"
 }
 
-launch oasis   8001 oasis   oasis        "${GPU_OASIS:-0}"
-launch diamond 8002 diamond diamond-csgo "${GPU_DIAMOND:-1}"
+launch oasis   8001 oasis   oasis        "${GPU_OASIS:-0}"   "${WM_OASIS_REPO:-}"
+launch diamond 8002 diamond diamond-csgo "${GPU_DIAMOND:-1}" "${WM_DIAMOND_REPO:-}"
 
 # --- 게이트웨이 ------------------------------------------------------------
 export WM_WORKER_OASIS="ws://127.0.0.1:8001/session"
@@ -212,6 +217,7 @@ export WM_WORKER_DIAMOND_ATARI="ws://127.0.0.1:8002/session"
 echo "기동: gateway 포트 8080"
 # `uvicorn` 콘솔 스크립트 대신 `python -m`을 쓴다.
 # conda + venv가 겹친 환경에서는 스크립트가 PATH에 없을 수 있다.
+PYTHONPATH="$PWD" \
 "$PY" -m uvicorn gateway.app:app --host 127.0.0.1 --port 8080 \
   --ws-max-size 16777216 --no-access-log > "$RUN_DIR/gateway.log" 2>&1 &
 echo $! > "$RUN_DIR/gateway.pid"
