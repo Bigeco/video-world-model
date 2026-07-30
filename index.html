@@ -534,6 +534,23 @@ const MODELS = [
     ]
   },
   {
+    id: "longlive",
+    name: "LongLive",
+    tag: "Long Video",
+    org: "NVLabs · ICLR 2026",
+    desc: "텍스트 프롬프트로 다음 장면을 계속 지시하는 실시간 인터랙티브 롱비디오 생성기. WASD로 조작하는 게임형 모델이 아니라, 숫자 키(1–9)로 지금 재생할 프롬프트를 전환합니다.",
+    specs: ["1.3B", "832×480", "~16 FPS", "open weights"],
+    sizeM: 1300,
+    paperDate: "2025-09",   // arXiv 2509.22622
+    pointerLock: false,
+    palette: ["#5e35b1", "#7e57c2", "#b39ddb", "#311b92", "#d1c4e9"],
+    keys: [],
+    help: [
+      ["1 – 9", "재생할 프롬프트 전환"],
+      ["W A S D / 마우스", "사용 안 함"]
+    ]
+  },
+  {
     id: "soon",
     soon: true,
     name: "추가 예정",
