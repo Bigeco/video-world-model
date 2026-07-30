@@ -24,14 +24,18 @@ logging.basicConfig(
 )
 
 ADAPTER = os.getenv("WM_MODEL", "oasis")
-DEFAULT_MODEL = os.getenv("WM_DEFAULT_MODEL", "oasis" if ADAPTER == "oasis" else "diamond-csgo")
+DEFAULT_MODEL = os.getenv("WM_DEFAULT_MODEL", ADAPTER if ADAPTER != "dummy" else "oasis")
 
 
 def factory(model_id: str):
     if ADAPTER == "oasis":
         from .adapters.oasis import build
-    elif ADAPTER == "diamond":
-        from .adapters.diamond import build
+    elif ADAPTER == "diamond-atari":
+        from .adapters.diamond_atari import build
+    elif ADAPTER == "diamond-csgo":
+        from .adapters.diamond_csgo import build
+    elif ADAPTER == "longlive":
+        from .adapters.longlive import build
     elif ADAPTER == "dummy":
         from .adapters.dummy import make_dummy as build
     else:

@@ -226,7 +226,9 @@ def t_action_mapping():
           abs(big["camera"][0]) == 20 and abs(big["camera"][1]) == 20)
 
     check("Minecraft 벡터 길이 13", minecraft_vector(a).shape == (13,))
-    check("CS:GO 벡터 길이 62", csgo_vector(a).shape == (62,),
+    # 51 = 키 11 + 발사/조준 2 + 마우스 원핫(23+15) — 원 리포 action_processing.py의
+    # encode_csgo_action()과 정확히 같은 차원 (예전 62는 실제 체크포인트와 안 맞던 버그).
+    check("CS:GO 벡터 길이 51", csgo_vector(a).shape == (51,),
           str(csgo_vector(a).shape))
 
     check("Atari: NOOP", to_atari(Action()) == 0)

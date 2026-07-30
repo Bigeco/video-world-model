@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Optional
@@ -27,6 +28,16 @@ from .encode import BACKEND, encode_jpeg, pack_frame
 from .stats import SessionStats
 
 log = logging.getLogger("worker")
+
+# 기본은 지연 로딩: 프로세스가 뜬다고 바로 GPU를 잡지 않고, 첫 세션이 실제로
+# 붙을 때 로드한다. "실행" 버튼을 누르기 전엔 GPU를 점유하지 않는다.
+# 1로 켜면 기존처럼 기동 시 미리 로드해둔다(첫 세션이 로딩을 안 기다림).
+EAGER_WARMUP = os.getenv("WM_EAGER_WARMUP", "0") == "1"
+
+# 세션이 끝나서 그 모델을 쓰는 사람이 아무도 없어지면(active==0) 바로 GPU에서
+# 내린다. 0으로 주면 언로드하지 않는다(한 번 로드되면 프로세스가 죽을 때까지
+# 유지 — 재접속이 잦을 때 재로딩을 피하고 싶으면 이 값을 켜라).
+IMMEDIATE_UNLOAD = os.getenv("WM_MODEL_IMMEDIATE_UNLOAD", "1") == "1"
 
 
 class SessionInput:
@@ -69,12 +80,17 @@ def create_app(factory: ModelFactory, default_model: str) -> FastAPI:
     """
     factory(model_id) -> WorldModel
 
-    프로세스 기동 시 모델을 한 번 로드해두고 세션마다 reset()만 하는 것을
-    권장합니다. 체크포인트 로딩은 수십 초가 걸리기도 해서, 세션마다 로드하면
-    사용자가 그 시간을 그대로 기다리게 됩니다.
+    기본은 지연 로딩(WM_EAGER_WARMUP=0): 첫 세션이 실제로 붙을 때만 로드한다.
+    WM_MODEL_IMMEDIATE_UNLOAD=1(기본)이면 그 모델을 쓰는 세션이 하나도 안
+    남는 순간 바로 GPU에서 내린다. 세션이 겹쳐 있는 동안(active>0)엔 절대
+    내리지 않는다.
     """
     app = FastAPI(title=f"World Model Worker ({default_model})")
-    state: dict = {"models": {}, "lock": asyncio.Lock()}
+    state: dict = {
+        "models": {},   # model_id -> WorldModel (로드된 것만)
+        "lock": asyncio.Lock(),
+        "active": {},    # model_id -> 현재 진행 중인 세션 수
+    }
 
     async def get_model(model_id: str) -> WorldModel:
         async with state["lock"]:
@@ -88,13 +104,29 @@ def create_app(factory: ModelFactory, default_model: str) -> FastAPI:
                 log.info("모델 로딩 완료 model=%s %.1fs", model_id, time.monotonic() - t0)
             return state["models"][model_id]
 
-    @app.on_event("startup")
-    async def _warmup() -> None:
-        log.info("JPEG 백엔드: %s", BACKEND)
+    async def _unload(model_id: str) -> None:
+        async with state["lock"]:
+            model = state["models"].pop(model_id, None)
+        if model is None:
+            return
+        loop = asyncio.get_running_loop()
         try:
-            await get_model(default_model)
+            await loop.run_in_executor(None, model.close)
         except Exception:
-            log.exception("워밍업 실패 — 첫 세션에서 다시 시도합니다")
+            log.exception("모델 언로드 중 close() 실패 model=%s", model_id)
+        del model
+        log.info("모델 언로드(GPU 메모리 반환) model=%s", model_id)
+
+    @app.on_event("startup")
+    async def _on_startup() -> None:
+        log.info("JPEG 백엔드: %s", BACKEND)
+        if EAGER_WARMUP:
+            try:
+                await get_model(default_model)
+            except Exception:
+                log.exception("워밍업 실패 — 첫 세션에서 다시 시도합니다")
+        else:
+            log.info("WM_EAGER_WARMUP=0 — 첫 세션이 붙을 때 모델을 로드합니다 (기동 시 GPU를 잡지 않음)")
 
     @app.get("/healthz")
     async def healthz() -> dict:
@@ -111,6 +143,7 @@ def create_app(factory: ModelFactory, default_model: str) -> FastAPI:
         # 세션당 스레드 1개. 추론은 여기서 돌고 이벤트 루프는 자유롭게 둔다.
         pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="infer")
         stop = asyncio.Event()
+        active_counted = False   # get_model() 이후에만 True — 실패한 세션은 카운트하지 않는다
 
         async def reader() -> None:
             nonlocal model_id
@@ -147,6 +180,9 @@ def create_app(factory: ModelFactory, default_model: str) -> FastAPI:
             # select/init이 도착할 짧은 여유를 준다 (게이트웨이가 즉시 보냄).
             await asyncio.sleep(0.05)
             model = await get_model(model_id)
+            async with state["lock"]:
+                state["active"][model_id] = state["active"].get(model_id, 0) + 1
+            active_counted = True
             loop = asyncio.get_running_loop()
             stats.model_id = model_id     # select/init으로 바뀌었을 수 있으니 최종값으로 맞춘다
 
@@ -206,6 +242,12 @@ def create_app(factory: ModelFactory, default_model: str) -> FastAPI:
             stop.set()
             reader_task.cancel()
             pool.shutdown(wait=False)
+            if active_counted:
+                async with state["lock"]:
+                    left = max(0, state["active"].get(model_id, 1) - 1)
+                    state["active"][model_id] = left
+                if left == 0 and IMMEDIATE_UNLOAD:
+                    await _unload(model_id)
             if stats is not None and (stats.frame_count or stats.actions):
                 try:
                     path = stats.write()

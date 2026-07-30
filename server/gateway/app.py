@@ -54,15 +54,21 @@ MAX_QUEUE = int(os.getenv("WM_MAX_QUEUE", "12"))               # 모델당 대�
 IDLE_TIMEOUT = int(os.getenv("WM_IDLE_TIMEOUT", "30"))         # 입력 없으면 회수
 
 # model_id -> (워커 주소, 동시 세션 수)
+#
+# diamond-csgo/diamond-atari는 서로 다른 저장소(브랜치)·모델 아키텍처라 워커 프로세스가
+# 분리돼 있습니다 (workers/adapters/diamond_atari.py, diamond_csgo.py 참고) — 기본
+# 워커 주소가 예전처럼 같은 "diamond" 호스트를 가리키지 않는 이유입니다.
 WORKERS: Dict[str, str] = {
     "oasis":         os.getenv("WM_WORKER_OASIS", "ws://oasis:8000/session"),
-    "diamond-csgo":  os.getenv("WM_WORKER_DIAMOND_CSGO", "ws://diamond:8000/session"),
-    "diamond-atari": os.getenv("WM_WORKER_DIAMOND_ATARI", "ws://diamond:8000/session"),
+    "diamond-csgo":  os.getenv("WM_WORKER_DIAMOND_CSGO", "ws://diamond-csgo:8000/session"),
+    "diamond-atari": os.getenv("WM_WORKER_DIAMOND_ATARI", "ws://diamond-atari:8000/session"),
+    "longlive":      os.getenv("WM_WORKER_LONGLIVE", "ws://longlive:8000/session"),
 }
 CAPACITY: Dict[str, int] = {
     "oasis":         int(os.getenv("WM_CAP_OASIS", "1")),
     "diamond-csgo":  int(os.getenv("WM_CAP_DIAMOND_CSGO", "1")),
     "diamond-atari": int(os.getenv("WM_CAP_DIAMOND_ATARI", "2")),
+    "longlive":      int(os.getenv("WM_CAP_LONGLIVE", "1")),
 }
 
 
@@ -316,6 +322,10 @@ class _SessionExpired(Exception):
     pass
 
 
+class _ClientGone(Exception):
+    """클라이언트가 정상적으로 연결을 끊음. 에러가 아니라 즉시 정리하라는 신호."""
+
+
 async def _safe_close(ws: WebSocket, code: int) -> None:
     try:
         await ws.close(code=code)
@@ -346,7 +356,11 @@ async def _run_session(ws: WebSocket, model_id: str, inbox: "asyncio.Queue") -> 
             while True:
                 msg = await inbox.get()
                 if msg is None:               # 클라이언트 연결 종료
-                    return
+                    # 그냥 return하면 FIRST_EXCEPTION 대기가 안 깨어나서, 워커가
+                    # 다음 프레임을 보내려다 실패할 때까지(또는 IDLE_TIMEOUT까지)
+                    # 워커 세션이 안 끊긴다 — 그동안 모델도 GPU에 남아있게 된다.
+                    # 예외를 던져서 바로 정리되게 한다.
+                    raise _ClientGone()
                 last_input = time.monotonic()
                 await worker.send(msg)
 
@@ -377,7 +391,7 @@ async def _run_session(ws: WebSocket, model_id: str, inbox: "asyncio.Queue") -> 
             done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
             for t in done:
                 exc = t.exception()
-                if exc:
+                if exc and not isinstance(exc, _ClientGone):
                     raise exc
         finally:
             for t in tasks:

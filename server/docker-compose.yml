@@ -18,12 +18,14 @@ services:
       WM_IDLE_TIMEOUT: ${WM_IDLE_TIMEOUT:-30}
       WM_MAX_QUEUE: ${WM_MAX_QUEUE:-12}
       WM_WORKER_OASIS: ws://oasis:8000/session
-      WM_WORKER_DIAMOND_CSGO: ws://diamond:8000/session
-      WM_WORKER_DIAMOND_ATARI: ws://diamond:8000/session
+      WM_WORKER_DIAMOND_ATARI: ws://diamond-atari:8000/session
+      WM_WORKER_DIAMOND_CSGO: ws://diamond-csgo:8000/session
+      WM_WORKER_LONGLIVE: ws://longlive:8000/session
       WM_CAP_OASIS: ${WM_CAP_OASIS:-1}
-      WM_CAP_DIAMOND_CSGO: ${WM_CAP_DIAMOND_CSGO:-1}
       WM_CAP_DIAMOND_ATARI: ${WM_CAP_DIAMOND_ATARI:-2}
-    depends_on: [oasis, diamond]
+      WM_CAP_DIAMOND_CSGO: ${WM_CAP_DIAMOND_CSGO:-1}
+      WM_CAP_LONGLIVE: ${WM_CAP_LONGLIVE:-1}
+    depends_on: [oasis, diamond-atari, diamond-csgo, longlive]
     restart: unless-stopped
 
   # --------------------------------------------------------------------
@@ -55,18 +57,17 @@ services:
               capabilities: [gpu]
 
   # --------------------------------------------------------------------
-  # DIAMOND 워커 (CS:GO + Atari 양쪽 서빙) — GPU 1
+  # DIAMOND(Atari) 워커 — GPU 1. `main` 브랜치 코드.
   # --------------------------------------------------------------------
-  diamond:
+  diamond-atari:
     build:
       context: .
-      dockerfile: workers/diamond.Dockerfile
+      dockerfile: workers/diamond-atari.Dockerfile
     environment:
-      WM_MODEL: diamond
-      WM_DEFAULT_MODEL: diamond-csgo
+      WM_MODEL: diamond-atari
       WM_DUMMY: ${WM_DUMMY:-0}
-      WM_DIAMOND_CSGO_CKPT: /weights/diamond_csgo.pt
       WM_DIAMOND_ATARI_CKPT: /weights/diamond_atari.pt
+      WM_DIAMOND_NUM_ACTIONS: ${WM_DIAMOND_NUM_ACTIONS:-18}
       WM_DENOISE_STEPS: ${WM_DENOISE_STEPS:-3}
       NVIDIA_VISIBLE_DEVICES: "1"
     volumes:
@@ -79,6 +80,59 @@ services:
           devices:
             - driver: nvidia
               device_ids: ["1"]
+              capabilities: [gpu]
+
+  # --------------------------------------------------------------------
+  # DIAMOND(CS:GO) 워커 — GPU 1 공유(원하면 device_ids 를 분리). `csgo` 브랜치 코드라
+  # 이미지가 diamond-atari와 다르다 (diamond-csgo.Dockerfile).
+  # --------------------------------------------------------------------
+  diamond-csgo:
+    build:
+      context: .
+      dockerfile: workers/diamond-csgo.Dockerfile
+    environment:
+      WM_MODEL: diamond-csgo
+      WM_DUMMY: ${WM_DUMMY:-0}
+      WM_DIAMOND_CSGO_CKPT: /weights/diamond_csgo.pt
+      WM_DIAMOND_CSGO_SPAWN_DIR: /weights/diamond_csgo_spawn
+      WM_DENOISE_STEPS: ${WM_DENOISE_STEPS:-3}
+      NVIDIA_VISIBLE_DEVICES: "1"
+    volumes:
+      - ${WM_WEIGHTS_DIR:-./weights}:/weights:ro
+    shm_size: "8gb"
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["1"]
+              capabilities: [gpu]
+
+  # --------------------------------------------------------------------
+  # LongLive 워커 — GPU 2 (있는 GPU 번호로 device_ids 를 바꾸세요).
+  # --------------------------------------------------------------------
+  longlive:
+    build:
+      context: .
+      dockerfile: workers/longlive.Dockerfile
+    environment:
+      WM_MODEL: longlive
+      WM_DUMMY: ${WM_DUMMY:-0}
+      WM_LONGLIVE_REPO: /opt/LongLive
+      WM_LONGLIVE_PROMPTS: ${WM_LONGLIVE_PROMPTS:-}
+      WM_FPS_LONGLIVE: ${WM_FPS_LONGLIVE:-16}
+      NVIDIA_VISIBLE_DEVICES: "2"
+    volumes:
+      - ${WM_WEIGHTS_DIR:-./weights}:/weights:ro
+    shm_size: "8gb"
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["2"]
               capabilities: [gpu]
 
   # --------------------------------------------------------------------

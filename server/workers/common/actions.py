@@ -156,18 +156,24 @@ def minecraft_vector(a: Action, sensitivity: float = 0.15) -> np.ndarray:
 # CS:GO (DIAMOND) — 키 이진 + 마우스 이동 이산 bin
 # ---------------------------------------------------------------------------
 
-# DIAMOND CS:GO는 마우스 이동을 이산 bin으로 다룹니다. 원 논문 구현의
-# bin 경계와 맞추세요 (csgo/action_processing.py 참조).
-CSGO_MOUSE_BINS = np.array(
-    [-1000, -500, -300, -200, -100, -60, -30, -20, -10, -4, -2, -0.5,
-     0.5, 2, 4, 10, 20, 30, 60, 100, 200, 300, 500, 1000],
+# DIAMOND CS:GO는 마우스 이동을 이산 bin으로 다룹니다. 원 리포
+# src/csgo/action_processing.py 의 encode_csgo_action() 과 정확히 같은 bin 경계·키
+# 순서·차원 수(51)여야 합니다. 하나라도 어긋나면 모델이 엉뚱한 입력으로 해석해
+# 화면이 무너집니다 — X/Y 축의 bin 개수가 다르고(23 vs 15), 0을 포함한다는 점에 주의.
+CSGO_MOUSE_X_BINS = np.array(
+    [-1000, -500, -300, -200, -100, -60, -30, -20, -10, -4, -2, 0,
+     2, 4, 10, 20, 30, 60, 100, 200, 300, 500, 1000],
+    dtype=np.float32,
+)
+CSGO_MOUSE_Y_BINS = np.array(
+    [-200, -100, -50, -20, -10, -4, -2, 0, 2, 4, 10, 20, 50, 100, 200],
     dtype=np.float32,
 )
 
+# encode_csgo_action() 의 keys_pressed_onehot 순서 그대로: w,a,s,d,space,ctrl,shift,1,2,3,r
 CSGO_KEYS = [
     "KeyW", "KeyA", "KeyS", "KeyD", "Space",
-    "ControlLeft", "ShiftLeft", "KeyR", "KeyE",
-    "Digit1", "Digit2", "Digit3",
+    "ControlLeft", "ShiftLeft", "Digit1", "Digit2", "Digit3", "KeyR",
 ]
 
 
@@ -180,17 +186,19 @@ def to_csgo(a: Action) -> Dict[str, Any]:
         "keys": {k: int(k in a.keys) for k in CSGO_KEYS},
         "fire": int(a.left),
         "scope": int(a.right),
-        "mouse_x_bin": _bin_index(a.dx, CSGO_MOUSE_BINS),
-        "mouse_y_bin": _bin_index(a.dy, CSGO_MOUSE_BINS),
+        "mouse_x_bin": _bin_index(a.dx, CSGO_MOUSE_X_BINS),
+        "mouse_y_bin": _bin_index(a.dy, CSGO_MOUSE_Y_BINS),
     }
 
 
 def csgo_vector(a: Action) -> np.ndarray:
-    """길이 = 키 12 + 발사/조준 2 + 마우스 원핫 2×24 = 62."""
+    """길이 = 키 11 + 발사(l_click) 1 + 조준(r_click) 1 + 마우스 원핫(23 + 15) = 51.
+    encode_csgo_action()과 동일한 순서: keys, l_click, r_click, mouse_x, mouse_y.
+    """
     d = to_csgo(a)
     keys = [float(d["keys"][k]) for k in CSGO_KEYS]
-    mx = np.zeros(len(CSGO_MOUSE_BINS), dtype=np.float32)
-    my = np.zeros(len(CSGO_MOUSE_BINS), dtype=np.float32)
+    mx = np.zeros(len(CSGO_MOUSE_X_BINS), dtype=np.float32)
+    my = np.zeros(len(CSGO_MOUSE_Y_BINS), dtype=np.float32)
     mx[d["mouse_x_bin"]] = 1.0
     my[d["mouse_y_bin"]] = 1.0
     return np.concatenate(
@@ -230,8 +238,22 @@ def to_atari(a: Action) -> int:
     return _ATARI_TABLE.get((up, down, left, right, fire), 0)
 
 
+# ---------------------------------------------------------------------------
+# LongLive — 게임형 액션이 아니라 "지금 재생 중인 프롬프트" 선택
+#
+# LongLive는 WASD로 조작하는 월드모델이 아니라 텍스트 프롬프트로 다음 장면을 계속
+# 지시하는 롱비디오 생성기다. hotbar 슬롯(1~9)을 프롬프트 목록(WM_LONGLIVE_PROMPTS,
+# '|' 구분) 인덱스로 재활용한다.
+# ---------------------------------------------------------------------------
+
+def longlive_prompt_index(a: Action, num_prompts: int) -> int:
+    """hotbar 1~9 → 프롬프트 인덱스(0-base). 목록보다 큰 슬롯은 마지막 프롬프트로 클램프."""
+    return max(1, min(max(1, num_prompts), a.hotbar)) - 1
+
+
 MAPPERS = {
     "oasis": oasis_vector,          # 25차원 VPT 포맷 (open-oasis 실제 규약)
     "diamond-csgo": csgo_vector,
     "diamond-atari": to_atari,
+    "longlive": longlive_prompt_index,
 }

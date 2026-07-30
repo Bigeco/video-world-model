@@ -135,5 +135,7 @@ def make_dummy(model_id: str) -> DummyWorldModel:
                              palette=((161, 135, 95), (200, 177, 138), (224, 214, 195))),
         "diamond-atari": dict(width=128, height=128, fps=30, label="DIAMOND/ATARI",
                               palette=((26, 35, 126), (216, 27, 96), (0, 172, 193))),
+        "longlive": dict(width=416, height=240, fps=16, label="LONGLIVE",
+                         palette=((69, 39, 160), (94, 53, 177), (179, 157, 219))),
     }
     return DummyWorldModel(**presets.get(model_id, presets["oasis"]))

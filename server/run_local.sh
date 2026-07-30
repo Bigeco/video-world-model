@@ -206,13 +206,23 @@ launch() {  # launch <이름> <포트> <WM_MODEL> <기본모델> <GPU> <모델�
   echo $! > "$RUN_DIR/$name.pid"
 }
 
-launch oasis   8001 oasis   oasis        "${GPU_OASIS:-0}"   "${WM_OASIS_REPO:-}"
-launch diamond 8002 diamond diamond-csgo "${GPU_DIAMOND:-1}" "${WM_DIAMOND_REPO:-}"
+# diamond-atari/diamond-csgo는 diamond 저장소의 서로 다른 git 브랜치(각각 main/csgo)를
+# 요구하는 별개 모델이라(모듈 이름은 같지만 내부 구조가 다름) 워커도 분리한다. 저장소
+# 코드 자체가 `from models.diffusion import ...` 처럼 저장소의 src/ 를 임포트 루트로
+# 쓰므로, PYTHONPATH에는 저장소 루트가 아니라 <저장소>/src 를 올려준다
+# (어댑터 코드가 config/ 를 찾을 때 쓰는 WM_DIAMOND_*_REPO 자체는 저장소 루트 그대로).
+diamond_src() { [ -n "$1" ] && echo "$1/src"; }
+
+launch oasis         8001 oasis          oasis         "${GPU_OASIS:-0}"          "${WM_OASIS_REPO:-}"
+launch diamond-atari 8002 diamond-atari  diamond-atari "${GPU_DIAMOND_ATARI:-1}"  "$(diamond_src "${WM_DIAMOND_ATARI_REPO:-}")"
+launch diamond-csgo  8003 diamond-csgo   diamond-csgo  "${GPU_DIAMOND_CSGO:-1}"   "$(diamond_src "${WM_DIAMOND_CSGO_REPO:-}")"
+launch longlive      8004 longlive       longlive      "${GPU_LONGLIVE:-2}"       "${WM_LONGLIVE_REPO:-}"
 
 # --- 게이트웨이 ------------------------------------------------------------
 export WM_WORKER_OASIS="ws://127.0.0.1:8001/session"
-export WM_WORKER_DIAMOND_CSGO="ws://127.0.0.1:8002/session"
 export WM_WORKER_DIAMOND_ATARI="ws://127.0.0.1:8002/session"
+export WM_WORKER_DIAMOND_CSGO="ws://127.0.0.1:8003/session"
+export WM_WORKER_LONGLIVE="ws://127.0.0.1:8004/session"
 
 echo "기동: gateway 포트 8080"
 # `uvicorn` 콘솔 스크립트 대신 `python -m`을 쓴다.
@@ -229,7 +239,7 @@ echo
 echo "기동 대기 중 (최대 ${WAIT_LIMIT}초)…"
 
 failed=0
-for entry in "oasis 8001" "diamond 8002" "gateway 8080"; do
+for entry in "oasis 8001" "diamond-atari 8002" "diamond-csgo 8003" "longlive 8004" "gateway 8080"; do
   set -- $entry
   name=$1 port=$2
   wait_up "$name" "$port" "$WAIT_LIMIT"

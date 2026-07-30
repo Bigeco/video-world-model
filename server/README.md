@@ -3,9 +3,16 @@
 브라우저가 붙는 게이트웨이 하나와, 모델별 GPU 워커로 구성됩니다.
 
 ```
-브라우저 ──wss──▶ cloudflared ──▶ gateway :8080 ──┬─▶ oasis   :8000  (GPU 0)
-                                  인증·대기열·TTL   └─▶ diamond :8000  (GPU 1)
+브라우저 ──wss──▶ cloudflared ──▶ gateway :8080 ──┬─▶ oasis         :8000  (GPU 0)
+                                  인증·대기열·TTL   ├─▶ diamond-atari :8000  (GPU 1)
+                                                    ├─▶ diamond-csgo  :8000  (GPU 1)
+                                                    └─▶ longlive      :8000  (GPU 2)
 ```
+
+diamond-atari/diamond-csgo가 분리된 이유: DIAMOND는 GitHub 저장소의 `main`(Atari)과
+`csgo` 브랜치가 아키텍처 자체가 달라(모듈 이름은 같지만 내부 구조가 다름) 한 프로세스에
+같이 얹을 수 없습니다. 자세한 내용은 `workers/adapters/diamond_atari.py`와
+`diamond_csgo.py`의 헤더 주석을 보세요.
 
 게이트웨이만 터널에 노출됩니다. 워커 포트는 **절대 외부에 열지 마세요** — 인증이 없습니다.
 
@@ -21,7 +28,8 @@ cp .env.example .env
 sed -i "s/^WM_TOKENS=.*/WM_TOKENS=$(openssl rand -hex 24)/" .env
 sed -i "s|^WM_ALLOWED_ORIGINS=.*|WM_ALLOWED_ORIGINS=https://<username>.github.io|" .env
 
-./run_local.sh dummy          # Docker 없이. venv 만들고 워커 2개 + 게이트웨이 기동
+./run_local.sh dummy          # Docker 없이. venv 만들고 워커 4개(oasis/diamond-atari/
+                               # diamond-csgo/longlive) + 게이트웨이 기동
 ```
 
 그다음 GitHub Pages 사이트를 열고 `.env`의 `WM_TOKENS` 값과 터널 주소를 입력하면 됩니다.
@@ -51,12 +59,64 @@ python tests/test_stack.py
 
 ## 3. 실제 모델 연결
 
-어댑터의 `TODO`만 채우면 됩니다. 나머지(추론 루프, 인코딩, 페이싱, 프레임 패킹)는 공통 런타임이 처리합니다.
+네 어댑터 모두 구현이 끝난 상태입니다 — 체크포인트만 받아서 경로를 채우면 됩니다.
+추론 루프, 인코딩, 페이싱, 프레임 패킹은 공통 런타임이 처리합니다.
 
-| 파일 | 할 일 |
-|---|---|
-| `workers/adapters/oasis.py` | 모델·VAE 로드 → 컨텍스트 초기화 → 잠재 샘플링 후 디코딩 |
-| `workers/adapters/diamond.py` | denoiser 로드 → 시작 프레임 버퍼 → `sampler.sample()` |
+`workers/requirements-common.txt`는 게이트웨이·워커 공통 의존성(fastapi, numpy, ...)만
+담고 있습니다. `torch`, `hydra-core`(DIAMOND), `omegaconf`/`peft`/`flash-attn`(LongLive)
+같은 모델별 의존성은 각 저장소의 `requirements.txt`에서 설치하세요 — 이미 torch가 깔린
+conda 환경을 워커별로 쓰는 걸 권장합니다(`WM_USE_VENV=0`, 위 1번 절 참고).
+
+| 파일 | 내용 | 상태 |
+|---|---|---|
+| `workers/adapters/oasis.py` | 모델·VAE 로드 → 컨텍스트 초기화 → 잠재 샘플링 후 디코딩 | ✅ 실제 체크포인트로 동작 확인됨 |
+| `workers/adapters/diamond_atari.py` | denoiser 로드 → 정적 시작 프레임 버퍼 → `sampler.sample()` | ✅ 구현 완료, 체크포인트 필요 |
+| `workers/adapters/diamond_csgo.py` | `Agent`(denoiser+upsampler) + `WorldModelEnv` 로드 → spawn 데이터로 워밍업 | ✅ 구현 완료, 체크포인트+spawn 데이터+별도 저장소(csgo 브랜치) 필요 |
+| `workers/adapters/longlive.py` | LongLive-1.3B 파이프라인을 블록 단위 스트리밍으로 래핑 | ✅ 구현 완료, 체크포인트 필요 |
+
+### DIAMOND — Atari와 CS:GO는 서로 다른 저장소 브랜치
+
+eloialonso/diamond의 `main`(Atari)과 `csgo` 브랜치는 코드가 통째로 다릅니다
+(denoiser 1단계 vs base+upsampler 2단계, 액션 인코딩도 이산 vs 51차원 연속). 그래서:
+
+* `models/diamond` (현재 `main` 브랜치, 이미 clone돼 있음) → `diamond-atari`가 사용.
+* CS:GO를 쓰려면 **별도 디렉터리**에 csgo 브랜치를 따로 clone 해야 합니다:
+  ```bash
+  git clone -b csgo https://github.com/eloialonso/diamond models/diamond-csgo
+  ```
+  체크포인트와 함께 초기 컨텍스트용 spawn 데이터셋(실제 녹화 프레임)도 필요합니다:
+  ```bash
+  huggingface-cli download eloialonso/diamond --include "csgo/*" \
+      --local-dir models/diamond-csgo/downloads
+  # csgo/model/csgo.pt  → WM_DIAMOND_CSGO_CKPT
+  # csgo/spawn/         → WM_DIAMOND_CSGO_SPAWN_DIR
+  ```
+* Atari 체크포인트: `huggingface-cli download eloialonso/diamond atari_100k/models/<게임>.pt`
+  → `WM_DIAMOND_ATARI_CKPT`. 체크포인트가 학습된 게임의 ALE 액션 개수와
+  `WM_DIAMOND_NUM_ACTIONS`(기본 18)가 반드시 일치해야 합니다.
+
+### LongLive — 반드시 `v1.0` 브랜치
+
+`models/LongLive`의 기본(`main`) 브랜치는 **LongLive 2.0**(5B, 오프라인 배치 생성
+전용 — 프레임 스트리밍이 안 됩니다)입니다. 이 프로젝트가 필요로 하는 실시간 인터랙티브
+버전(LongLive-1.3B, `interactive_inference.py`)은 `v1.0` 브랜치에만 있습니다 —
+이미 이 저장소에서 `git checkout v1.0`으로 전환해뒀습니다.
+
+가중치가 **두 종류** 따로 필요합니다 (LongLive 체크포인트 하나만으론 안 됩니다):
+
+```bash
+# 1) Wan2.1-T2V-1.3B 베이스 (T5 텍스트 인코더 + VAE + 토크나이저) — LongLive가 아니라
+#    원본 Wan2.1 저장소 것입니다. LongLive 코드가 이 경로를 상대경로로 하드코딩해서 찾습니다.
+huggingface-cli download Wan-AI/Wan2.1-T2V-1.3B \
+    --local-dir models/LongLive/wan_models/Wan2.1-T2V-1.3B
+
+# 2) LongLive-1.3B 체크포인트 (generator + LoRA)
+huggingface-cli download Efficient-Large-Model/LongLive --local-dir models/LongLive/longlive_models
+```
+
+LongLive는 WASD로 조작하는 게임형 월드모델이 아니라 텍스트 프롬프트로 다음 장면을 계속
+지시하는 롱비디오 생성기입니다. hotbar 슬롯(1~9)이 `WM_LONGLIVE_PROMPTS`(`|` 구분)의
+프롬프트를 선택하는 스위치로 재활용됩니다 — 4번 절 참고.
 
 구현해야 하는 인터페이스는 두 개뿐입니다 (`workers/common/base.py`):
 
@@ -92,13 +152,19 @@ Dockerfile에 각 리포를 clone하는 자리를 주석으로 표시해뒀습�
 
 | 모델 | 함수 | 출력 |
 |---|---|---|
-| Oasis | `minecraft_vector()` | float32[13] — 버튼 11 + 카메라 2 |
-| DIAMOND CS:GO | `csgo_vector()` | float32[62] — 키 12 + 발사/조준 2 + 마우스 원핫 24×2 |
+| Oasis | `oasis_vector()` | float32[25] — open-oasis `ACTION_KEYS` 규약 |
+| DIAMOND CS:GO | `csgo_vector()` | float32[51] — 키 11 + 발사/조준 2 + 마우스 원핫(23+15) |
 | DIAMOND Atari | `to_atari()` | int — ALE 표준 18개 중 하나 |
+| LongLive | `longlive_prompt_index()` | int — hotbar(1~9) → `WM_LONGLIVE_PROMPTS` 인덱스 |
 
 **카메라 delta는 ±20도로 클램프됩니다.** 한 틱에 그보다 크게 도는 입력은 학습 분포 밖이라
-모델 출력이 무너집니다. 실제 체크포인트를 붙일 때 `CSGO_MOUSE_BINS` 경계는 원 리포의
-`action_processing.py` 값과 맞춰주세요.
+모델 출력이 무너집니다. CS:GO의 `CSGO_MOUSE_X_BINS`/`CSGO_MOUSE_Y_BINS`·키 순서는 원 리포
+`src/csgo/action_processing.py`의 `encode_csgo_action()`과 정확히 맞춰뒀습니다(총 51차원 —
+X/Y 축 bin 개수가 다르고 0을 포함합니다. 옛 62차원 벡터는 실제 체크포인트와 맞지 않던
+버그였습니다).
+
+LongLive는 WASD가 아니라 hotbar 숫자로 "지금 재생 중인 프롬프트"를 고릅니다 — 3번 절의
+LongLive 설명 참고.
 
 새 모델을 추가하려면 이 파일에 매퍼 함수 하나만 더 쓰면 됩니다.
 
@@ -124,6 +190,9 @@ GPU 1장은 동시 세션 1개가 안전합니다. 게이트웨이가 이걸 강
 ```json
 {"models":[{"id":"oasis","capacity":1,"active":1,"queued":3,"eta":480}], "session_ttl":120}
 ```
+
+`WM_CAP_OASIS` / `WM_CAP_DIAMOND_ATARI` / `WM_CAP_DIAMOND_CSGO` / `WM_CAP_LONGLIVE` 로
+모델별 동시 세션 수를 각각 조절합니다.
 
 ---
 
@@ -214,8 +283,10 @@ server/
 │   │   ├── encode.py             프레임 정규화 · JPEG · 와이어 패킹
 │   │   └── server.py             추론 루프 (최신 액션 우선, 페이싱)
 │   └── adapters/
-│       ├── oasis.py              ← TODO 3곳
-│       ├── diamond.py            ← TODO 3곳
+│       ├── oasis.py              open-oasis, 실제 체크포인트로 동작 확인됨
+│       ├── diamond_atari.py      DIAMOND main 브랜치(Atari)
+│       ├── diamond_csgo.py       DIAMOND csgo 브랜치(CS:GO) — 별도 저장소 체크아웃 필요
+│       ├── longlive.py           LongLive v1.0(1.3B) — 텍스트 프롬프트 기반 롱비디오
 │       └── dummy.py              가중치 없이 파이프라인 검증용
 ├── tests/test_stack.py           통합 테스트
 ├── docker-compose.yml            모델별 GPU 할당

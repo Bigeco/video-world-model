@@ -223,6 +223,17 @@ class OasisWorldModel(WorldModel):
         return img.float().cpu().numpy()                         # CHW, 런타임이 정규화
 
     def close(self) -> None:
+        # empty_cache()는 "이미 참조가 끊긴" 블록만 드라이버에 반환한다.
+        # self.model/vae 등을 들고 있는 채로 부르면 아무것도 안 풀린다 —
+        # 먼저 참조를 끊어서 파이썬 refcount가 0이 되게 한 뒤에 호출해야
+        # nvidia-smi 기준으로도 실제로 메모리가 줄어든다.
+        self.model = None
+        self.vae = None
+        self.x = None
+        self.actions = None
+        self._prompt_latent = None
+        self.alphas_cumprod = None
+        self.noise_range = None
         if getattr(self, "torch", None) is not None:
             self.torch.cuda.empty_cache()
 
