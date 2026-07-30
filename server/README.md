@@ -171,7 +171,12 @@ Dockerfile에 각 리포를 clone하는 자리를 주석으로 표시해뒀습�
 | DIAMOND denoising steps | `config/world_model_env`의 `diffusion_sampler.num_steps_denoising` 기본 **3** | `WM_DENOISE_STEPS` 기본 3 | ✅ 원래부터 일치 |
 | DIAMOND 컨텍스트 길이(`num_steps_conditioning`) | `config/agent/*.yaml` 기본 **4** | config에서 그대로 읽음(하드코딩 안 함) | ✅ 일치 |
 | DIAMOND-Atari 액션 인덱스 | 게임마다 다른 축소 액션셋(`full_action_space=False`) | `ale-py`로 26개 게임 전부 실측해 게임별 정확한 인덱스 사용 | ✅ 이전 세션에서 수정 |
+| **DIAMOND-Atari 프레임 크기** | 논문 5.3절: "Both world models are rendering frames **at the same resolution (64×64)**" — 26개 게임 전부 동일, 게임별로 다르지 않음 (arXiv:2405.12399) | `config/env/atari.yaml`의 `size: 64`를 그대로 읽음(모델 자체는 원래부터 정확) | ✅ 모델은 원래 일치 — **웹페이지 표시 쪽에 버그 있었음(아래)** |
+| DIAMOND-CSGO 프레임 크기 | 논문 6절: world model 본체는 **(56×30)**로 축소해 돌리고, 업샘플러가 **(280×150)** 원해상도로 복원(`upsampling_factor=5`) | `config/agent/csgo.yaml`의 `upsampling_factor: 5` + `WorldModelEnv`(공식 코드)가 그대로 처리 | ✅ 원래부터 일치 |
 | DIAMOND-CSGO 초기 컨텍스트 | 실제 녹화된 spawn 데이터셋 | 공식 코드(`WorldModelEnv`)가 그대로 spawn 데이터셋을 읽음 | ✅ 원래부터 일치 |
+| **웹페이지 프레임 표시 비율** | (해당 없음 — 프론트엔드 이슈) | `.stage`가 CSS로 **16:9 고정**이라, 정사각형(DIAMOND-Atari 64×64)이나 CS:GO(280×150) 프레임이 와이드로 늘어나 찌그러져 보였음 | 🔧 **수정함** — 매 프레임 실제 도착한 해상도로 `aspect-ratio`를 동적으로 맞춤 |
+
+> 정리: DIAMOND의 실제 추론 해상도는 **논문 그대로 26개 게임 전부 64×64로 이미 맞았습니다** — 게임별로 다른 프레임 크기를 쓰라는 내용은 논문에 없습니다(오히려 "같은 해상도인데도 IRIS보다 낫다"는 게 논문의 포인트). "프레임 크기가 이상하다"고 느껴졌던 원인은 웹페이지가 항상 16:9 박스에 억지로 꽉 채워 그리면서 정사각형 화면이 와이드로 찌그러져 보였던 것이었고, 이제 실제 수신한 프레임의 가로세로 비율에 맞춰 `.stage`의 종횡비를 그때그때 갱신합니다.
 
 가장 유력한 원인은 **DIAMOND(Atari)의 초기 컨텍스트**였습니다. DIAMOND는 학습 때부터
 "진짜 게임 화면 4장 + 그때 실제로 취해진 액션"만 조건으로 봤는데, 저희 어댑터는 지금까지
