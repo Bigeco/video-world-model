@@ -155,6 +155,43 @@ Dockerfile에 각 리포를 clone하는 자리를 주석으로 표시해뒀습�
 그다음이 fp16/bf16 autocast와 `channels_last`, 그다음이 컨텍스트 길이 축소입니다.
 `torch.compile`은 첫 호출이 수십 초 걸리므로 기동 시 워밍업으로 한 번 돌려두세요.
 
+### 공식 구현과의 설정 비교 (품질 저하/일관성 붕괴 디버깅용)
+
+라이브 세션에서 생성 품질(특히 일관성)이 논문·공식 데모보다 눈에 띄게 빨리 무너진다면,
+아래 두 가지를 실제로 대조해서 확인·수정한 내용입니다. 새로 뭔가 이상하면 이 표부터
+다시 보세요.
+
+| 항목 | 공식(paper/repo) | 우리 서버 | 상태 |
+|---|---|---|---|
+| Oasis DDIM steps | `generate.py --ddim-steps` 기본 **10** | `WM_DIFFUSION_STEPS` 기본 8 → **10으로 수정** | ✅ 고정 |
+| Oasis noise schedule/상수 | `sigmoid_beta_schedule`, `stabilization_level=15`, `noise_abs_max=20`, `scaling_factor=0.07843137255` | `oasis.py`에 동일 상수로 이식 | ✅ 원래부터 일치 |
+| Oasis 컨텍스트 길이 | `model.max_frames`(DiT-S/2 기본 **32**) | `getattr(model,"max_frames",16)` — 실제로는 모델 속성이 있어 32로 동작 | ✅ 일치 |
+| Oasis 시작 프레임 | `sample_data/sample_image_0.png` 1장 | 동일 파일을 `WM_OASIS_PROMPT`로 사용 | ✅ 일치 |
+| **DIAMOND(Atari) 초기 컨텍스트** | `play.py`가 **실제 ALE 환경**에서 몇 스텝 플레이해 얻은 진짜 프레임+액션으로 워밍업 |~~정적 회색 이미지 4장 반복~~ → **실제 ALE 환경(noop_max=30 + NOOP `context-1`스텝)으로 진짜 프레임 수집**으로 수정 | 🔧 **수정함 — 가장 유력한 원인** |
+| DIAMOND denoising steps | `config/world_model_env`의 `diffusion_sampler.num_steps_denoising` 기본 **3** | `WM_DENOISE_STEPS` 기본 3 | ✅ 원래부터 일치 |
+| DIAMOND 컨텍스트 길이(`num_steps_conditioning`) | `config/agent/*.yaml` 기본 **4** | config에서 그대로 읽음(하드코딩 안 함) | ✅ 일치 |
+| DIAMOND-Atari 액션 인덱스 | 게임마다 다른 축소 액션셋(`full_action_space=False`) | `ale-py`로 26개 게임 전부 실측해 게임별 정확한 인덱스 사용 | ✅ 이전 세션에서 수정 |
+| DIAMOND-CSGO 초기 컨텍스트 | 실제 녹화된 spawn 데이터셋 | 공식 코드(`WorldModelEnv`)가 그대로 spawn 데이터셋을 읽음 | ✅ 원래부터 일치 |
+
+가장 유력한 원인은 **DIAMOND(Atari)의 초기 컨텍스트**였습니다. DIAMOND는 학습 때부터
+"진짜 게임 화면 4장 + 그때 실제로 취해진 액션"만 조건으로 봤는데, 저희 어댑터는 지금까지
+정적인 회색 이미지 4장 + NOOP 4개로 시작했습니다. 모델 입장에선 완전히 분포 밖의 입력이라
+초반 프레임이 깨지고, DIAMOND는 매 프레임 직전 프레임들을 컨텍스트로 재사용하는 슬라이딩
+윈도우 구조라 그 깨짐이 계속 다음 프레임으로 전파됩니다 — "시작하자마자 급격히 무너지는"
+증상과 정확히 들어맞습니다. 지금은 `ale_py`로 실제 게임을 짧게 띄워 진짜 프레임을 받은
+뒤(사람이 아직 조작하기 전 상태와 동일) 그 환경은 닫고, 이후는 전부 world model이
+자기회귀로 생성합니다.
+
+Oasis는 시작 프레임이 원래 저장소가 배포하는 진짜 샘플 이미지 1장이라 이 문제는 없었고,
+DDIM step 수(8→10)만 공식값으로 되돌렸습니다.
+
+**그래도 남는 근본적인 차이**: 논문/공식 데모 영상은 대개 학습 분포와 비슷한, 부드럽고
+짧은(수 초) 액션 시퀀스로 만들어집니다. 여기 서버는 사람이 실시간으로 몇 분씩 임의로
+조작하는 훨씬 더 도전적인 조건이라, 설정을 전부 공식값과 맞춰도 장시간 플레이에서는
+자기회귀 오차가 누적돼 서서히(또는 액션이 튈 때 갑자기) 품질이 떨어지는 건 diffusion
+forcing 계열 월드모델 자체의 알려진 한계입니다 — 버그가 아니라 "리셋하고 다시 시작하면
+괜찮아지는" 종류의 현상이면 이쪽일 가능성이 높습니다.
+
 ---
 
 ## 4. 액션 매핑

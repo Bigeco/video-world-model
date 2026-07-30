@@ -10,12 +10,15 @@ DIAMOND(Atari) 어댑터 — eloialonso/diamond `main` 브랜치 실제 추론 �
   있고, 그쪽은 별도 저장소 체크아웃(csgo 브랜치)을 요구합니다.
 
 이 파일은 저장소의 `src/play.py`(`prepare_play_mode`)를 **상호작용용 상태 루프**로 바꾼
-것입니다. 원본은 실제 Atari(gym/ALE) 환경에서 몇 스텝을 실제로 플레이해 그 프레임들로
-world model의 초기 컨텍스트(`num_steps_conditioning`장)를 채웁니다. 우리는 게이트웨이가
-ALE 의존성을 강제하지 않도록, 정적 이미지 한 장(WM_DIAMOND_ATARI_PROMPT, 없으면 회색
-화면)을 컨텍스트 프레임 수만큼 복제해 시작합니다 — Oasis 어댑터가 시작 프레임 한 장으로
-잠재 컨텍스트를 초기화하는 것과 같은 절충입니다. 실제 게임 프레임으로 시작하고 싶다면
-`reset()`을 원본처럼 바꿔도 됩니다(ale_py/gymnasium은 아래 이유로 어차피 설치돼 있습니다).
+것입니다. 원본은 실제 Atari(gym/ALE) 환경에서 실제로 몇 스텝을 플레이해 그 프레임+액션
+으로 world model의 초기 컨텍스트(`num_steps_conditioning`장)를 채웁니다 — 학습 때부터
+"진짜 게임 화면 N장 + 그때의 진짜 액션"만 컨디셔닝으로 받아왔기 때문에, 이 초기 컨텍스트가
+분포를 벗어나면(예: 정적인 회색/단색 이미지를 반복) 첫 몇 프레임이 깨지고 그 깨짐이 슬라이딩
+윈도우를 타고 계속 전파돼 이후 생성 전체의 안정성이 눈에 띄게 떨어집니다. 그래서 `reset()`은
+`ale_py`/`gymnasium`으로 실제 게임을 잠깐 띄워(`noop_max` 랜덤 시작 + NOOP `context-1`스텝)
+진짜 프레임들을 받아온 뒤 그 환경은 바로 닫습니다 — 이후 프레임은 전부 world model이
+자기회귀로 만들고, 실제 환경은 다시 필요 없습니다. ALE 환경 생성에 실패하면(등록 안 된
+게임 id 등) `WM_DIAMOND_ATARI_PROMPT`(정적 이미지, 없으면 회색 화면)로 조용히 대체합니다.
 
 전제:
   * diamond 저장소(main 브랜치)의 `src/` 가 PYTHONPATH 에 있어야 합니다 — 저장소 코드가
@@ -90,6 +93,43 @@ def _load_prompt_image(path: str, size: int) -> np.ndarray:
     return arr
 
 
+def _collect_real_context(game: str, size: int, context: int) -> np.ndarray:
+    """실제 ALE 환경을 짧게 띄워 진짜 프레임 `context`장을 모은다.
+
+    저장소의 envs/env.py(make_atari_env)와 정확히 같은 전처리(AtariPreprocessing:
+    noop_max=30, frame_skip=4, screen_size, cv2 INTER_AREA 리사이즈, 마지막 2프레임
+    맥스풀링)를 그대로 재사용한다 — 직접 재구현하지 않고 저장소 클래스를 그대로 임포트해서
+    쓰므로 전처리가 어긋날 일이 없다. 처음 프레임은 noop_max 랜덤 시작 이후의 리셋 프레임,
+    나머지는 NOOP(항상 액션 인덱스 0)을 밟아서 얻는다 — 실제 사람이 아직 아무 입력도 하지
+    않은 상태의 게임 시작 화면과 동일한 분포다.
+
+    반환: (context, C, size, size) float32 [-1, 1] — CHW 배치 순서는 obs_buf에 넣는 순서와
+    동일(0번째가 가장 오래된 프레임).
+    """
+    import gymnasium
+    import ale_py
+
+    gymnasium.register_envs(ale_py)
+    from envs.atari_preprocessing import AtariPreprocessing
+
+    env = gymnasium.make(f"{game}NoFrameskip-v4", full_action_space=False,
+                          frameskip=1, render_mode="rgb_array")
+    env = AtariPreprocessing(env=env, noop_max=30, frame_skip=4, screen_size=size)
+    try:
+        obs, _ = env.reset()
+        frames = [obs]
+        for _ in range(context - 1):
+            obs, _, terminated, truncated, _ = env.step(0)   # NOOP
+            if terminated or truncated:
+                obs, _ = env.reset()
+            frames.append(obs)
+    finally:
+        env.close()
+
+    arr = np.stack(frames).astype(np.float32) / 255.0 * 2.0 - 1.0   # (T,H,W,C) [-1,1]
+    return arr.transpose(0, 3, 1, 2)                                  # (T,C,H,W)
+
+
 class DiamondAtariWorldModel(WorldModel):
     fps = int(os.getenv("WM_FPS_ATARI", "30"))
     quality = int(os.getenv("WM_JPEG_QUALITY", "80"))
@@ -138,15 +178,23 @@ class DiamondAtariWorldModel(WorldModel):
 
     def reset(self) -> np.ndarray:
         torch = self.torch
-        if PROMPT_PATH and os.path.exists(PROMPT_PATH):
-            frame = _load_prompt_image(PROMPT_PATH, self.img_size)
-        else:
-            frame = np.zeros((3, self.img_size, self.img_size), dtype=np.float32)   # 회색(0) 화면
-        obs0 = torch.from_numpy(frame).to(self.device)
+        try:
+            ctx = _collect_real_context(self.game, self.img_size, self.context)   # (T,C,H,W)
+            frames = [torch.from_numpy(f).to(self.device) for f in ctx]
+            log.info("실제 ALE 환경에서 초기 컨텍스트 %d장 수집 완료 (game=%s)", len(frames), self.game)
+        except Exception:
+            log.exception("실제 ALE 환경으로 컨텍스트를 채우지 못해 정적 이미지로 대체합니다 "
+                          "(game=%s) — 초반 몇 프레임의 화질/일관성이 떨어질 수 있습니다.", self.game)
+            if PROMPT_PATH and os.path.exists(PROMPT_PATH):
+                frame = _load_prompt_image(PROMPT_PATH, self.img_size)
+            else:
+                frame = np.zeros((3, self.img_size, self.img_size), dtype=np.float32)   # 회색(0) 화면
+            obs0 = torch.from_numpy(frame).to(self.device)
+            frames = [obs0.clone() for _ in range(self.context)]
 
-        self.obs_buf: deque = deque([obs0.clone() for _ in range(self.context)], maxlen=self.context)
-        self.act_buf: deque = deque([0] * self.context, maxlen=self.context)
-        return obs0.float().cpu().numpy()
+        self.obs_buf: deque = deque(frames, maxlen=self.context)
+        self.act_buf: deque = deque([0] * self.context, maxlen=self.context)   # 전부 NOOP(진짜 대응)
+        return self.obs_buf[-1].float().cpu().numpy()
 
     def step(self, action: Action) -> np.ndarray:
         torch = self.torch

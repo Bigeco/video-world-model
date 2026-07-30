@@ -41,7 +41,7 @@ services:
       WM_DUMMY: ${WM_DUMMY:-0}
       WM_OASIS_CKPT: /weights/oasis500m.pt
       WM_OASIS_VAE: /weights/vit-l-20.pt
-      WM_DIFFUSION_STEPS: ${WM_DIFFUSION_STEPS:-8}
+      WM_DIFFUSION_STEPS: ${WM_DIFFUSION_STEPS:-10}
       WM_FPS_OASIS: ${WM_FPS_OASIS:-20}
       NVIDIA_VISIBLE_DEVICES: "0"
     volumes:

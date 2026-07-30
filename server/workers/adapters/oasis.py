@@ -44,7 +44,9 @@ NOISE_ABS_MAX = 20.0
 STABILIZATION_LEVEL = 15
 
 # 실시간을 위한 조절 손잡이
-DDIM_STEPS = int(os.getenv("WM_DIFFUSION_STEPS", "8"))   # generate.py 기본 10
+DDIM_STEPS = int(os.getenv("WM_DIFFUSION_STEPS", "10"))   # generate.py 기본값과 동일. 실시간이
+                                                            # 안 나오면 4~8로 낮추되, 품질(특히
+                                                            # 장시간 플레이의 일관성)이 떨어진다.
 SCALING_FACTOR = 0.07843137255                            # generate.py 와 동일
 
 
