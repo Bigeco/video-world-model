@@ -868,7 +868,7 @@ function connect(m){
     S.readyGuard = setTimeout(() => {
       try{ ws.close(); }catch(e){}
       logDiag("error", "세션 시작 안 됨(20초)",
-        "소켓은 열렸지만 ready/queue가 오지 않았습니다. 게이트웨이는 살아 있으나 워커가 안 떠 있을 때 주로 발생합니다. 서버에서 .run/oasis.log 확인.");
+        `소켓은 열렸지만 ready/queue가 오지 않았습니다. 게이트웨이는 살아 있으나 워커가 안 떠 있을 때 주로 발생합니다. 서버에서 .run/${m.id}.log 확인.`);
       setStatus("err", "응답 없음");
       overlay("세션이 시작되지 않습니다",
         "서버에는 연결됐지만 20초 안에 세션이 열리지 않았습니다. " +
@@ -936,7 +936,7 @@ function handleJson(msg){
     case "error":
       logDiag("error", "서버가 오류 보고", msg.detail || "");
       fail(msg.message || "서버 오류",
-        msg.detail || "워커에서 추론 중 예외가 발생했습니다. 서버 .run/oasis.log 에서 전체 트레이스백을 확인하세요.");
+        msg.detail || `워커에서 추론 중 예외가 발생했습니다. 서버 .run/${S.model ? S.model.id : "<model>"}.log 에서 전체 트레이스백을 확인하세요.`);
       break;
     case "pong":
       break;
