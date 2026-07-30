@@ -177,18 +177,24 @@
      그대로 보여주되, 화면보다 크면(예: Oasis 640×360) 스크롤 없이 보이도록 뷰포트
      기준으로만 축소한다. 원본보다 확대하는 일은 없다(max-*만 쓰고 width/height는
      캔버스의 실제 픽셀 크기를 그대로 따름). */
-  .stage-col{display:flex;flex-direction:column;align-items:center}
+  .stage-col{display:flex;flex-direction:column;align-items:center;width:100%}
   .stage{
     position:relative;background:#000;border:1px solid var(--line);border-radius:12px;
-    overflow:hidden;display:flex;align-items:center;justify-content:center;
-    max-width:100%;max-height:min(66vh,640px);
+    overflow:hidden;max-width:100%;max-height:min(66vh,640px);
+  }
+  /* 화면 크기 모드 (설정 > 화면 크기): "native" = 원본 픽셀 그대로(확대 안 함) — .stage가
+     캔버스 크기에 맞춰 감싸기만 한다. "fit" = 비율 유지한 채 뷰포트 안에서(스크롤 없이)
+     최대한 확대 — layoutStage()가 매 프레임 .stage에 정확한 px 크기를 계산해 넣어준다
+     (CSS의 aspect-ratio+width:100% 조합은 max-height에 잘릴 때 비율이 깨질 수 있어 피함). */
+  .stage.native{
+    display:flex;align-items:center;justify-content:center;
     min-width:min(320px,100%);min-height:180px;   /* 아주 작은 해상도(64×64 등)에서도
                                                        로딩 스피너·문구가 안 눌리게 */
   }
-  #view{
-    display:block;image-rendering:pixelated;cursor:crosshair;
-    max-width:100%;max-height:min(66vh,640px);
-  }
+  .stage.native #view{display:block;image-rendering:pixelated;cursor:crosshair;
+    max-width:100%;max-height:min(66vh,640px)}
+  .stage.fit #view{display:block;width:100%;height:100%;
+    image-rendering:pixelated;cursor:crosshair}
   .overlay{
     position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
     flex-direction:column;gap:14px;background:rgba(6,7,11,.86);backdrop-filter:blur(3px);
@@ -422,6 +428,15 @@
       <div class="hint">서버 생성 FPS와 맞추세요. 너무 높으면 대역폭만 낭비됩니다.</div>
     </div>
     <div class="fgroup">
+      <label for="setScaleMode">화면 크기</label>
+      <select class="field" id="setScaleMode">
+        <option value="native">원본 크기 그대로 (확대 안 함)</option>
+        <option value="fit">화면에 맞게 확대 (스크롤 없이 최대로)</option>
+      </select>
+      <div class="hint">원본 크기는 저해상도 모델(예: DIAMOND-Atari 64×64)이 작게 보입니다.
+        "화면에 맞게"는 비율은 유지한 채 화면을 최대한 채우도록 확대합니다 — 흐려 보일 수 있습니다.</div>
+    </div>
+    <div class="fgroup">
       <label>옵션</label>
       <label class="switch"><input type="checkbox" id="setSmooth"> 캔버스 스무딩 (끄면 픽셀 그대로)</label>
       <label class="switch"><input type="checkbox" id="setInvert"> 마우스 Y축 반전</label>
@@ -609,6 +624,8 @@ const S = {
   sens: parseFloat(store.get("wm.sens", "1")),
   invert: store.get("wm.invert", "0") === "1",
   smooth: store.get("wm.smooth", "0") === "1",
+  scaleMode: store.get("wm.scaleMode", "native"),   // "native" | "fit"
+  lastFrameSize: null,   // {w,h} — fit 모드 레이아웃 계산에 사용, 세션마다 리셋
   held: new Set(),
   mouse: { dx:0, dy:0, left:false, right:false },
   hotbar: 1,
@@ -835,11 +852,42 @@ function paintThumb(cv, m){
 /* =========================================================
    5. 세션 시작
    ========================================================= */
+// 화면 크기 모드(설정 > 화면 크기)를 .stage에 반영한다.
+//   native — .stage가 캔버스 원본 픽셀 크기에 맞춰 감싸기만 한다(CSS만으로 충분).
+//   fit    — 비율 유지한 채 뷰포트 안에서(스크롤 없이) 최대한 확대. CSS의
+//            aspect-ratio + width:100% 조합은 max-height에 잘릴 때 비율이 깨질 수
+//            있어서, 여기선 매번 정확한 px 크기를 직접 계산해 넣는다("contain" 스케일링).
+function applyStageMode(){
+  const stage = $("#view").closest(".stage");
+  if (!stage) return;
+  stage.classList.toggle("fit", S.scaleMode === "fit");
+  stage.classList.toggle("native", S.scaleMode !== "fit");
+  layoutStage();
+}
+
+function layoutStage(){
+  const stage = $("#view").closest(".stage");
+  const col = stage && stage.closest(".stage-col");
+  if (!stage || !col) return;
+  if (S.scaleMode !== "fit"){
+    stage.style.width = ""; stage.style.height = "";
+    return;
+  }
+  const { w: bmpW, h: bmpH } = S.lastFrameSize || { w: 640, h: 360 };   // 첫 프레임 오기 전 기본값
+  const maxW = col.clientWidth || bmpW;
+  const maxH = Math.min(window.innerHeight * 0.66, 640);
+  const scale = Math.min(maxW / bmpW, maxH / bmpH);
+  stage.style.width  = Math.max(1, Math.round(bmpW * scale)) + "px";
+  stage.style.height = Math.max(1, Math.round(bmpH * scale)) + "px";
+}
+window.addEventListener("resize", () => { if (S.scaleMode === "fit") layoutStage(); });
+
 function startSession(m){
   S.model = m;
   S.frames = 0; S.seq = 0; S.latency = null;
   S.fpsWindow = []; S.pending.clear(); S.held.clear();
   S.mouse = { dx:0, dy:0, left:false, right:false };
+  S.lastFrameSize = null;   // 이전 세션 해상도가 잠깐이라도 새 세션에 남지 않게
 
   $("#playTitle").textContent = m.name;
   $("#playTag").textContent = m.tag;
@@ -847,6 +895,7 @@ function startSession(m){
   buildKeyViz(m);
   buildKeymap(m);
   show("play");
+  applyStageMode();   // #play가 보인 뒤에 계산해야 .stage-col의 실제 너비를 읽을 수 있다
 
   const view = $("#view");
   // 로딩 오버레이(스피너/문구)가 이전 세션의 작은 해상도(예: DIAMOND-Atari 64×64)에
@@ -1008,14 +1057,16 @@ function handleFrame(buf){
   const blob = new Blob([buf.slice(8)], { type:"image/jpeg" });
   createImageBitmap(blob).then(bmp => {
     const cv = $("#view"), c = cv.getContext("2d");
-    // 캔버스의 실제 픽셀 크기(width/height 속성)를 프레임 해상도에 맞춘다. CSS 쪽은
-    // width/height를 지정하지 않고 max-width/max-height만 둬서, 원본 그대로(확대 없이)
-    // 보여주다가 화면보다 크면(예: Oasis 640×360)만 줄어들도록 했다 — .stage도 캔버스
-    // 크기에 딱 맞게 감싸므로 모델마다 다른 해상도(DIAMOND-Atari 64×64, CS:GO 280×150...)
-    // 가 찌그러지거나 억지로 늘어나지 않는다.
+    // 캔버스의 실제 픽셀 크기(width/height 속성)를 프레임 해상도에 맞춘다.
+    // "native" 모드는 CSS max-width/max-height만 둬서 원본 그대로(확대 없이) 보여주다가
+    // 화면보다 크면(예: Oasis 640×360)만 줄어든다. "fit" 모드는 layoutStage()가 비율을
+    // 유지한 채 뷰포트 안에서(스크롤 없이) 최대한 채우도록 .stage 크기를 계산해 넣는다
+    // — 설정의 "화면 크기"로 전환 (applyStageMode()).
     if (cv.width !== bmp.width || cv.height !== bmp.height){
       cv.width = bmp.width; cv.height = bmp.height;
       c.imageSmoothingEnabled = S.smooth;
+      S.lastFrameSize = { w: bmp.width, h: bmp.height };
+      layoutStage();
     }
     c.drawImage(bmp, 0, 0);
     bmp.close();
@@ -1157,6 +1208,8 @@ const mock = {
     const cv = $("#view");
     cv.width = 320; cv.height = 180;
     cv.getContext("2d").imageSmoothingEnabled = false;
+    S.lastFrameSize = { w: 320, h: 180 };
+    layoutStage();
     this.cam = { x:0, y:1.6, z:0, yaw:0, pitch:0, vy:0, bob:0 };
     this.blocks = [];
     let s = 99;
@@ -1338,6 +1391,7 @@ $("#btnSettings").addEventListener("click", () => {
   $("#setSens").value   = S.sens;
   $("#setInvert").checked = S.invert;
   $("#setSmooth").checked = S.smooth;
+  $("#setScaleMode").value = S.scaleMode;
   $("#modal").classList.add("open");
 });
 $("#setClose").addEventListener("click", () => $("#modal").classList.remove("open"));
@@ -1349,12 +1403,15 @@ $("#setSave").addEventListener("click", () => {
   S.sens   = parseFloat($("#setSens").value) || 1;
   S.invert = $("#setInvert").checked;
   S.smooth = $("#setSmooth").checked;
+  S.scaleMode = $("#setScaleMode").value === "fit" ? "fit" : "native";
   store.set("wm.server", S.server);
   store.set("wm.tick", String(S.tickHz));
   store.set("wm.sens", String(S.sens));
   store.set("wm.invert", S.invert ? "1" : "0");
   store.set("wm.smooth", S.smooth ? "1" : "0");
+  store.set("wm.scaleMode", S.scaleMode);
   $("#view").getContext("2d").imageSmoothingEnabled = S.smooth;
+  applyStageMode();
   if (S.timers.length) startLoops();
   $("#modal").classList.remove("open");
 });
