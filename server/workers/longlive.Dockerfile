@@ -20,9 +20,9 @@ RUN pip install --no-cache-dir -r requirements-common.txt
 #   ENV PYTHONPATH=/opt/LongLive:$PYTHONPATH
 #
 # 가중치 2종류 (longlive.py 헤더 주석 참고):
-#   RUN huggingface-cli download Wan-AI/Wan2.1-T2V-1.3B \
+#   RUN hf download Wan-AI/Wan2.1-T2V-1.3B \
 #         --local-dir /opt/LongLive/wan_models/Wan2.1-T2V-1.3B
-#   RUN huggingface-cli download Efficient-Large-Model/LongLive \
+#   RUN hf download Efficient-Large-Model/LongLive \
 #         --local-dir /opt/LongLive/longlive_models
 # ---------------------------------------------------------------------
 

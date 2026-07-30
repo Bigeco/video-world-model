@@ -231,12 +231,19 @@ def t_action_mapping():
     check("CS:GO 벡터 길이 51", csgo_vector(a).shape == (51,),
           str(csgo_vector(a).shape))
 
+    # 기본 game="Alien"은 ALE 표준 18액션을 전부 쓰므로 인덱스가 예전 고정 테이블과 같다.
     check("Atari: NOOP", to_atari(Action()) == 0)
     check("Atari: FIRE", to_atari(Action(keys=frozenset({"Space"}))) == 1)
     check("Atari: UP", to_atari(Action(keys=frozenset({"ArrowUp"}))) == 2)
     check("Atari: UP+FIRE", to_atari(Action(keys=frozenset({"ArrowUp", "Space"}))) == 10)
     check("Atari: 상충 입력(좌+우) 상쇄",
           to_atari(Action(keys=frozenset({"ArrowLeft", "ArrowRight"}))) == 0)
+
+    # 게임별 축소 액션셋 — Breakout=[NOOP,FIRE,RIGHT,LEFT]엔 UP이 없으니 NOOP으로 떨어진다.
+    check("Atari(Breakout): FIRE", to_atari(Action(keys=frozenset({"Space"})), "Breakout") == 1)
+    check("Atari(Breakout): RIGHT", to_atari(Action(keys=frozenset({"ArrowRight"})), "Breakout") == 2)
+    check("Atari(Breakout): 없는 액션(UP)은 NOOP으로",
+          to_atari(Action(keys=frozenset({"ArrowUp"})), "Breakout") == 0)
 
     consumed = a.consumed()
     check("consumed(): 마우스 delta 소진", consumed.dx == 0 and consumed.dy == 0)

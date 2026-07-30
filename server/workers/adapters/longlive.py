@@ -40,10 +40,10 @@ LongLive는 오아시스/다이아몬드처럼 WASD로 캐릭터를 조작하는
   * 가중치가 두 종류 따로 필요합니다 (LongLive 체크포인트 하나만으론 안 됩니다):
       1) Wan2.1-T2V-1.3B 베이스(T5 텍스트 인코더 + VAE + 토크나이저) — LongLive가 아니라
          원본 Wan2.1 저장소 것입니다:
-           huggingface-cli download Wan-AI/Wan2.1-T2V-1.3B \\
+           hf download Wan-AI/Wan2.1-T2V-1.3B \\
              --local-dir <WM_LONGLIVE_REPO>/wan_models/Wan2.1-T2V-1.3B
       2) LongLive-1.3B 체크포인트(generator + LoRA):
-           huggingface-cli download Efficient-Large-Model/LongLive \\
+           hf download Efficient-Large-Model/LongLive \\
              --local-dir <WM_LONGLIVE_REPO>/longlive_models
 
 가중치가 없거나 WM_DUMMY=1 이면 더미로 폴백합니다.
@@ -316,9 +316,9 @@ def build(model_id: str) -> WorldModel:
     if missing:
         raise FileNotFoundError(
             "가중치를 찾을 수 없습니다: " + ", ".join(missing) + "\n"
-            "  huggingface-cli download Wan-AI/Wan2.1-T2V-1.3B --local-dir "
+            "  hf download Wan-AI/Wan2.1-T2V-1.3B --local-dir "
             f"{LONGLIVE_REPO}/wan_models/Wan2.1-T2V-1.3B\n"
-            "  huggingface-cli download Efficient-Large-Model/LongLive --local-dir "
+            "  hf download Efficient-Large-Model/LongLive --local-dir "
             f"{LONGLIVE_REPO}/longlive_models\n"
             "  파이프라인만 확인하려면 WM_DUMMY=1 로 실행하세요."
         )

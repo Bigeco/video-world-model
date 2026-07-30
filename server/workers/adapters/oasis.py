@@ -249,8 +249,8 @@ def build(model_id: str) -> WorldModel:
     if missing:
         raise FileNotFoundError(
             "체크포인트를 찾을 수 없습니다: " + ", ".join(missing) + "\n"
-            "  huggingface-cli download Etched/oasis-500m oasis500m.safetensors\n"
-            "  huggingface-cli download Etched/oasis-500m vit-l-20.safetensors\n"
+            "  hf download Etched/oasis-500m oasis500m.safetensors\n"
+            "  hf download Etched/oasis-500m vit-l-20.safetensors\n"
             "  로 받아 WM_OASIS_CKPT / WM_OASIS_VAE 에 경로를 지정하세요.\n"
             "  파이프라인만 확인하려면 WM_DUMMY=1 로 실행하세요."
         )

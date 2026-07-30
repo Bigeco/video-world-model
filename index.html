@@ -155,6 +155,11 @@
   .specs{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:16px}
   .spec{font-size:11px;font-family:var(--mono);color:var(--fg-faint);
     background:var(--bg);border:1px solid var(--line-soft);padding:3px 8px;border-radius:5px}
+  .card .gameSelect{
+    width:100%;padding:8px 11px;border-radius:8px;background:var(--bg);
+    border:1px solid var(--line-soft);color:var(--fg);font-size:12.5px;margin-bottom:10px;
+  }
+  .card .gameSelect:focus{outline:none;border-color:var(--accent)}
   .card .run{
     width:100%;padding:9px;border-radius:8px;background:var(--panel-2);
     border:1px solid var(--line);font-size:13.5px;font-weight:600;transition:.15s;
@@ -516,7 +521,17 @@ const MODELS = [
     name: "DIAMOND",
     tag: "Atari 100k",
     org: "Alonso et al. · NeurIPS 2024",
-    desc: "동일 아키텍처의 Atari 버전. 저해상도지만 훨씬 가볍기 때문에 지연 테스트나 다중 세션 부하 실험에 적합합니다.",
+    desc: "동일 아키텍처의 Atari 버전. 저해상도지만 훨씬 가볍기 때문에 지연 테스트나 다중 세션 부하 실험에 적합합니다. atari_100k 벤치마크 26개 게임 체크포인트를 전부 받아뒀습니다 — 아래에서 게임을 골라 실행하세요.",
+    // 서버 model_id는 "diamond-atari-<소문자>" 형식 (workers/common/actions.ATARI_GAMES와
+    // 정확히 같은 26개). 카드에 드롭다운으로 렌더링되고, 실행 시 이 목록의 값이 그대로
+    // model_id 접미사가 됩니다.
+    games: [
+      "Alien", "Amidar", "Assault", "Asterix", "BankHeist", "BattleZone", "Boxing",
+      "Breakout", "ChopperCommand", "CrazyClimber", "DemonAttack", "Freeway",
+      "Frostbite", "Gopher", "Hero", "Jamesbond", "Kangaroo", "Krull", "KungFuMaster",
+      "MsPacman", "Pong", "PrivateEye", "Qbert", "RoadRunner", "Seaquest", "UpNDown",
+    ],
+    defaultGame: "Breakout",
     specs: ["~50M", "64×64", "~30 FPS", "open source"],
     sizeM: 50,
     paperDate: "2024-05",    // arXiv 2405.12399 (DIAMOND 논문, CS:GO와 동일)
@@ -758,18 +773,33 @@ function buildCards(){
   list.forEach(m => {
     const card = document.createElement("div");
     card.className = "card" + (m.soon ? " soon" : "");
+    const gamePicker = m.games ? `
+      <select class="gameSelect">
+        ${m.games.map(gm => `<option value="${gm}"${gm === m.defaultGame ? " selected" : ""}>${gameLabel(gm)}</option>`).join("")}
+      </select>
+    ` : "";
     card.innerHTML = `
       <div class="thumb"><canvas width="240" height="80"></canvas></div>
       <h3>${m.name} <span class="tag">${m.tag}</span></h3>
       <div class="org">${m.org}</div>
       <p class="desc">${m.desc}</p>
       <div class="specs">${m.specs.map(s => `<span class="spec">${s}</span>`).join("")}</div>
+      ${gamePicker}
       <button class="run">${m.soon ? "준비 중" : "실행 →"}</button>
     `;
-    if (!m.soon) card.querySelector(".run").addEventListener("click", () => startSession(m));
+    if (!m.soon) card.querySelector(".run").addEventListener("click", () => {
+      const sel = card.querySelector(".gameSelect");
+      const picked = sel ? { ...m, id: `${m.id}-${sel.value.toLowerCase()}`, tag: `${m.tag} · ${gameLabel(sel.value)}` } : m;
+      startSession(picked);
+    });
     g.appendChild(card);
     paintThumb(card.querySelector("canvas"), m);
   });
+}
+
+// "ChopperCommand" -> "Chopper Command" 식으로 카멜케이스 게임 이름을 사람이 읽기 좋게.
+function gameLabel(game){
+  return game.replace(/([a-z0-9])([A-Z])/g, "$1 $2");
 }
 
 // 카드 썸네일: 모델 팔레트로 만든 정적 프리뷰 (실제 출력 아님)
@@ -831,6 +861,12 @@ function endSession(){
   show("picker");
 }
 
+// diamond-atari-<게임>은 전부 워커 프로세스 하나(diamond-atari)를 공유하므로,
+// 로그 파일도 .run/diamond-atari.log 하나뿐이다 (게임별 로그가 따로 없음).
+function workerLogName(id){
+  return id.startsWith("diamond-atari-") ? "diamond-atari" : id;
+}
+
 /* =========================================================
    6. WebSocket — 프로토콜은 README.md 참조
    ========================================================= */
@@ -868,7 +904,7 @@ function connect(m){
     S.readyGuard = setTimeout(() => {
       try{ ws.close(); }catch(e){}
       logDiag("error", "세션 시작 안 됨(20초)",
-        `소켓은 열렸지만 ready/queue가 오지 않았습니다. 게이트웨이는 살아 있으나 워커가 안 떠 있을 때 주로 발생합니다. 서버에서 .run/${m.id}.log 확인.`);
+        `소켓은 열렸지만 ready/queue가 오지 않았습니다. 게이트웨이는 살아 있으나 워커가 안 떠 있을 때 주로 발생합니다. 서버에서 .run/${workerLogName(m.id)}.log 확인.`);
       setStatus("err", "응답 없음");
       overlay("세션이 시작되지 않습니다",
         "서버에는 연결됐지만 20초 안에 세션이 열리지 않았습니다. " +
@@ -936,7 +972,7 @@ function handleJson(msg){
     case "error":
       logDiag("error", "서버가 오류 보고", msg.detail || "");
       fail(msg.message || "서버 오류",
-        msg.detail || `워커에서 추론 중 예외가 발생했습니다. 서버 .run/${S.model ? S.model.id : "<model>"}.log 에서 전체 트레이스백을 확인하세요.`);
+        msg.detail || `워커에서 추론 중 예외가 발생했습니다. 서버 .run/${S.model ? workerLogName(S.model.id) : "<model>"}.log 에서 전체 트레이스백을 확인하세요.`);
       break;
     case "pong":
       break;

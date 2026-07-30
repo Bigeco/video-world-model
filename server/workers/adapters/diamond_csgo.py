@@ -26,7 +26,7 @@ Atari 어댑터와 달리 CS:GO는 `Agent`(denoiser+upsampler 묶음)와 `WorldM
     — `config/agent/csgo.yaml` 에서 `rew_end_model: null, actor_critic: null`).
   * spawn 데이터셋 — 실제 CS:GO 녹화에서 뽑은 초기 컨텍스트 프레임 모음. 체크포인트와
     함께 배포됩니다:
-        huggingface-cli download eloialonso/diamond --include "csgo/*" --local-dir <저장소>/downloads
+        hf download eloialonso/diamond --include "csgo/*" --local-dir <저장소>/downloads
     spawn 디렉터리는 `<다운로드>/csgo/spawn` 아래에 있습니다. `WM_DIAMOND_CSGO_SPAWN_DIR`
     로 지정하세요. (`WorldModelEnv`가 여기서 진짜 프레임+액션을 읽어 컨텍스트를 채웁니다
     — Atari 어댑터처럼 정적 이미지로 흉내내지 않는 이유는, 실제 라이브 소스가 원 리포에
@@ -142,7 +142,7 @@ def build(model_id: str) -> WorldModel:
     if missing:
         raise FileNotFoundError(
             "체크포인트/spawn 데이터를 찾을 수 없습니다: " + ", ".join(missing) + "\n"
-            "  huggingface-cli download eloialonso/diamond --include \"csgo/*\" "
+            "  hf download eloialonso/diamond --include \"csgo/*\" "
             f"--local-dir {DIAMOND_CSGO_REPO}/downloads\n"
             "  csgo/model/csgo.pt → WM_DIAMOND_CSGO_CKPT\n"
             "  csgo/spawn/        → WM_DIAMOND_CSGO_SPAWN_DIR\n"

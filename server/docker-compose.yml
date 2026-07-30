@@ -66,8 +66,10 @@ services:
     environment:
       WM_MODEL: diamond-atari
       WM_DUMMY: ${WM_DUMMY:-0}
-      WM_DIAMOND_ATARI_CKPT: /weights/diamond_atari.pt
-      WM_DIAMOND_NUM_ACTIONS: ${WM_DIAMOND_NUM_ACTIONS:-18}
+      # /weights/diamond_atari/<게임>.pt 26개 전부 (atari_100k 벤치마크). model_id로
+      # diamond-atari-<게임소문자>를 골라 접속한다 — workers/adapters/diamond_atari.py 참고.
+      WM_DIAMOND_ATARI_WEIGHTS_DIR: /weights/diamond_atari
+      WM_DIAMOND_ATARI_DEFAULT_GAME: ${WM_DIAMOND_ATARI_DEFAULT_GAME:-Breakout}
       WM_DENOISE_STEPS: ${WM_DENOISE_STEPS:-3}
       NVIDIA_VISIBLE_DEVICES: "1"
     volumes:

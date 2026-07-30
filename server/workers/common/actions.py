@@ -207,25 +207,87 @@ def csgo_vector(a: Action) -> np.ndarray:
 
 
 # ---------------------------------------------------------------------------
-# Atari — 단일 이산 액션 (ALE 표준 18개 중 필요한 것)
+# Atari — 단일 이산 액션. DIAMOND의 atari_100k 체크포인트 26종은 게임마다 서로 다른
+# "축소 액션셋"(ALE의 get_action_meanings(), full_action_space=False)으로 학습돼
+# 있다. 예를 들어 Breakout은 [NOOP, FIRE, RIGHT, LEFT] 4개뿐이고, Alien은 ALE 표준
+# 18개를 전부 쓴다. 체크포인트가 기대하는 인덱스와 다른 인덱스를 넣으면 엉뚱한
+# 버튼을 누른 것으로 해석돼 화면이 무너지므로, 게임별로 정확한 인덱스를 찾아야 한다.
+#
+# 각 게임의 목록은 축소판이어도 항상 ALE 표준 18개 순서의 부분열이다(값 자체가
+# 바뀌는 게 아니라 없는 것만 빠짐 — NOOP은 모든 게임에서 항상 인덱스 0). 그래서
+# to_atari()는 먼저 키 입력을 표준 18개 중 하나의 "이름"으로 바꾼 다음, 그 이름을
+# 해당 게임의 목록에서 찾아 인덱스로 변환한다. 게임에 없는 이름이면(예: Breakout에서
+# 위쪽 방향키) NOOP으로 떨어진다.
+#
+# 아래 표는 추측이 아니라 실제로 ale-py==0.9.0(gymnasium, full_action_space=False)을
+# 설치해 26개 게임 전부 env.unwrapped.get_action_meanings()를 직접 호출해 뽑은 값이다.
 # ---------------------------------------------------------------------------
 
-# NOOP FIRE UP RIGHT LEFT DOWN UPRIGHT UPLEFT DOWNRIGHT DOWNLEFT
-# UPFIRE RIGHTFIRE LEFTFIRE DOWNFIRE UPRIGHTFIRE UPLEFTFIRE DOWNRIGHTFIRE DOWNLEFTFIRE
-_ATARI_TABLE = {
-    (0, 0, 0, 0, 0): 0,   (0, 0, 0, 0, 1): 1,
-    (1, 0, 0, 0, 0): 2,   (0, 0, 0, 1, 0): 3,
-    (0, 0, 1, 0, 0): 4,   (0, 1, 0, 0, 0): 5,
-    (1, 0, 0, 1, 0): 6,   (1, 0, 1, 0, 0): 7,
-    (0, 1, 0, 1, 0): 8,   (0, 1, 1, 0, 0): 9,
-    (1, 0, 0, 0, 1): 10,  (0, 0, 0, 1, 1): 11,
-    (0, 0, 1, 0, 1): 12,  (0, 1, 0, 0, 1): 13,
-    (1, 0, 0, 1, 1): 14,  (1, 0, 1, 0, 1): 15,
-    (0, 1, 0, 1, 1): 16,  (0, 1, 1, 0, 1): 17,
+ATARI_GAMES = [
+    "Alien", "Amidar", "Assault", "Asterix", "BankHeist", "BattleZone", "Boxing",
+    "Breakout", "ChopperCommand", "CrazyClimber", "DemonAttack", "Freeway",
+    "Frostbite", "Gopher", "Hero", "Jamesbond", "Kangaroo", "Krull", "KungFuMaster",
+    "MsPacman", "Pong", "PrivateEye", "Qbert", "RoadRunner", "Seaquest", "UpNDown",
+]
+
+# ALE 표준 18액션 전체 (모든 게임의 목록은 이 순서를 유지하는 부분열).
+_ATARI_FULL_18 = [
+    "NOOP", "FIRE", "UP", "RIGHT", "LEFT", "DOWN", "UPRIGHT", "UPLEFT",
+    "DOWNRIGHT", "DOWNLEFT", "UPFIRE", "RIGHTFIRE", "LEFTFIRE", "DOWNFIRE",
+    "UPRIGHTFIRE", "UPLEFTFIRE", "DOWNRIGHTFIRE", "DOWNLEFTFIRE",
+]
+
+# 게임별 실제(축소) 액션 목록. env.unwrapped.get_action_meanings()와 동일.
+ATARI_GAME_ACTIONS = {
+    "Alien": _ATARI_FULL_18,
+    "Amidar": ["NOOP", "FIRE", "UP", "RIGHT", "LEFT", "DOWN", "UPFIRE", "RIGHTFIRE", "LEFTFIRE", "DOWNFIRE"],
+    "Assault": ["NOOP", "FIRE", "UP", "RIGHT", "LEFT", "RIGHTFIRE", "LEFTFIRE"],
+    "Asterix": ["NOOP", "UP", "RIGHT", "LEFT", "DOWN", "UPRIGHT", "UPLEFT", "DOWNRIGHT", "DOWNLEFT"],
+    "BankHeist": _ATARI_FULL_18,
+    "BattleZone": _ATARI_FULL_18,
+    "Boxing": _ATARI_FULL_18,
+    "Breakout": ["NOOP", "FIRE", "RIGHT", "LEFT"],
+    "ChopperCommand": _ATARI_FULL_18,
+    "CrazyClimber": ["NOOP", "UP", "RIGHT", "LEFT", "DOWN", "UPRIGHT", "UPLEFT", "DOWNRIGHT", "DOWNLEFT"],
+    "DemonAttack": ["NOOP", "FIRE", "RIGHT", "LEFT", "RIGHTFIRE", "LEFTFIRE"],
+    "Freeway": ["NOOP", "UP", "DOWN"],
+    "Frostbite": _ATARI_FULL_18,
+    "Gopher": ["NOOP", "FIRE", "UP", "RIGHT", "LEFT", "UPFIRE", "RIGHTFIRE", "LEFTFIRE"],
+    "Hero": _ATARI_FULL_18,
+    "Jamesbond": _ATARI_FULL_18,
+    "Kangaroo": _ATARI_FULL_18,
+    "Krull": _ATARI_FULL_18,
+    "KungFuMaster": ["NOOP", "UP", "RIGHT", "LEFT", "DOWN", "DOWNRIGHT", "DOWNLEFT",
+                      "RIGHTFIRE", "LEFTFIRE", "DOWNFIRE", "UPRIGHTFIRE", "UPLEFTFIRE",
+                      "DOWNRIGHTFIRE", "DOWNLEFTFIRE"],
+    "MsPacman": ["NOOP", "UP", "RIGHT", "LEFT", "DOWN", "UPRIGHT", "UPLEFT", "DOWNRIGHT", "DOWNLEFT"],
+    "Pong": ["NOOP", "FIRE", "RIGHT", "LEFT", "RIGHTFIRE", "LEFTFIRE"],
+    "PrivateEye": _ATARI_FULL_18,
+    "Qbert": ["NOOP", "FIRE", "UP", "RIGHT", "LEFT", "DOWN"],
+    "RoadRunner": _ATARI_FULL_18,
+    "Seaquest": _ATARI_FULL_18,
+    "UpNDown": ["NOOP", "FIRE", "UP", "DOWN", "UPFIRE", "DOWNFIRE"],
+}
+
+# 입력 조합(up,down,left,right,fire) → ALE 표준 액션 이름. 예전 _ATARI_TABLE(콤보→
+# 18개 중 인덱스)과 같은 조합이지만, 여기선 이름으로 남겨뒀다가 게임별 목록에서
+# 실제 인덱스를 다시 찾는다.
+_ATARI_COMBO_TO_NAME = {
+    (0, 0, 0, 0, 0): "NOOP",           (0, 0, 0, 0, 1): "FIRE",
+    (1, 0, 0, 0, 0): "UP",             (0, 0, 0, 1, 0): "RIGHT",
+    (0, 0, 1, 0, 0): "LEFT",           (0, 1, 0, 0, 0): "DOWN",
+    (1, 0, 0, 1, 0): "UPRIGHT",        (1, 0, 1, 0, 0): "UPLEFT",
+    (0, 1, 0, 1, 0): "DOWNRIGHT",      (0, 1, 1, 0, 0): "DOWNLEFT",
+    (1, 0, 0, 0, 1): "UPFIRE",         (0, 0, 0, 1, 1): "RIGHTFIRE",
+    (0, 0, 1, 0, 1): "LEFTFIRE",       (0, 1, 0, 0, 1): "DOWNFIRE",
+    (1, 0, 0, 1, 1): "UPRIGHTFIRE",    (1, 0, 1, 0, 1): "UPLEFTFIRE",
+    (0, 1, 0, 1, 1): "DOWNRIGHTFIRE",  (0, 1, 1, 0, 1): "DOWNLEFTFIRE",
 }
 
 
-def to_atari(a: Action) -> int:
+def to_atari(a: Action, game: str = "Alien") -> int:
+    """`game`(ATARI_GAMES 중 하나, 대소문자 그대로)이 실제로 학습된 축소 액션셋에서의
+    인덱스를 돌려준다. 그 게임에 없는 동작이면 NOOP(항상 인덱스 0)으로 떨어진다."""
     up    = int(a.held("ArrowUp", "KeyW"))
     down  = int(a.held("ArrowDown", "KeyS"))
     left  = int(a.held("ArrowLeft", "KeyA"))
@@ -235,7 +297,9 @@ def to_atari(a: Action) -> int:
         up = down = 0          # 상충 입력은 상쇄
     if left and right:
         left = right = 0
-    return _ATARI_TABLE.get((up, down, left, right, fire), 0)
+    name = _ATARI_COMBO_TO_NAME.get((up, down, left, right, fire), "NOOP")
+    actions = ATARI_GAME_ACTIONS.get(game, _ATARI_FULL_18)
+    return actions.index(name) if name in actions else 0
 
 
 # ---------------------------------------------------------------------------

@@ -53,22 +53,40 @@ SESSION_TTL = int(os.getenv("WM_SESSION_TTL", "120"))          # 세션당 초
 MAX_QUEUE = int(os.getenv("WM_MAX_QUEUE", "12"))               # 모델당 대기열 상한
 IDLE_TIMEOUT = int(os.getenv("WM_IDLE_TIMEOUT", "30"))         # 입력 없으면 회수
 
+# DIAMOND(Atari) atari_100k 게임 26종 전부를 "diamond-atari-<게임소문자>" model_id로
+# 서빙합니다(예: diamond-atari-breakout). 전부 같은 워커 프로세스/GPU를 쓰므로 워커
+# 주소·용량은 하나만 있으면 됩니다 — 실제 게임별 목록은
+# workers/common/actions.ATARI_GAMES 가 정본입니다. 다만 이 파일(gateway/app.py)은
+# Docker 이미지에 workers/ 가 안 들어가므로(gateway/Dockerfile 참고) import로 공유하지
+# 못하고 그대로 복사해뒀습니다 — 게임 목록이 바뀌면 두 곳 다 고치세요.
+ATARI_GAMES = [
+    "Alien", "Amidar", "Assault", "Asterix", "BankHeist", "BattleZone", "Boxing",
+    "Breakout", "ChopperCommand", "CrazyClimber", "DemonAttack", "Freeway",
+    "Frostbite", "Gopher", "Hero", "Jamesbond", "Kangaroo", "Krull", "KungFuMaster",
+    "MsPacman", "Pong", "PrivateEye", "Qbert", "RoadRunner", "Seaquest", "UpNDown",
+]
+
 # model_id -> (워커 주소, 동시 세션 수)
 #
 # diamond-csgo/diamond-atari는 서로 다른 저장소(브랜치)·모델 아키텍처라 워커 프로세스가
 # 분리돼 있습니다 (workers/adapters/diamond_atari.py, diamond_csgo.py 참고) — 기본
 # 워커 주소가 예전처럼 같은 "diamond" 호스트를 가리키지 않는 이유입니다.
+_WORKER_DIAMOND_ATARI = os.getenv("WM_WORKER_DIAMOND_ATARI", "ws://diamond-atari:8000/session")
+_CAP_DIAMOND_ATARI = int(os.getenv("WM_CAP_DIAMOND_ATARI", "2"))
+
 WORKERS: Dict[str, str] = {
     "oasis":         os.getenv("WM_WORKER_OASIS", "ws://oasis:8000/session"),
     "diamond-csgo":  os.getenv("WM_WORKER_DIAMOND_CSGO", "ws://diamond-csgo:8000/session"),
-    "diamond-atari": os.getenv("WM_WORKER_DIAMOND_ATARI", "ws://diamond-atari:8000/session"),
+    "diamond-atari": _WORKER_DIAMOND_ATARI,   # 접미사 없으면 어댑터가 기본 게임(Breakout)으로 대체
     "longlive":      os.getenv("WM_WORKER_LONGLIVE", "ws://longlive:8000/session"),
+    **{f"diamond-atari-{g.lower()}": _WORKER_DIAMOND_ATARI for g in ATARI_GAMES},
 }
 CAPACITY: Dict[str, int] = {
     "oasis":         int(os.getenv("WM_CAP_OASIS", "1")),
     "diamond-csgo":  int(os.getenv("WM_CAP_DIAMOND_CSGO", "1")),
-    "diamond-atari": int(os.getenv("WM_CAP_DIAMOND_ATARI", "2")),
+    "diamond-atari": _CAP_DIAMOND_ATARI,
     "longlive":      int(os.getenv("WM_CAP_LONGLIVE", "1")),
+    **{f"diamond-atari-{g.lower()}": _CAP_DIAMOND_ATARI for g in ATARI_GAMES},
 }
 
 

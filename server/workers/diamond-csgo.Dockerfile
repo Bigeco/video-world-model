@@ -18,7 +18,7 @@ RUN pip install --no-cache-dir -r requirements-common.txt
 #   ENV PYTHONPATH=/opt/diamond-csgo/src:$PYTHONPATH
 #
 # 체크포인트와 함께 spawn 데이터셋(초기 컨텍스트용 실제 녹화 프레임)도 받아야 한다:
-#   RUN huggingface-cli download eloialonso/diamond --include "csgo/*" \
+#   RUN hf download eloialonso/diamond --include "csgo/*" \
 #         --local-dir /opt/diamond-csgo/downloads
 #   csgo/model/csgo.pt → WM_DIAMOND_CSGO_CKPT, csgo/spawn/ → WM_DIAMOND_CSGO_SPAWN_DIR
 # ---------------------------------------------------------------------

@@ -138,4 +138,10 @@ def make_dummy(model_id: str) -> DummyWorldModel:
         "longlive": dict(width=416, height=240, fps=16, label="LONGLIVE",
                          palette=((69, 39, 160), (94, 53, 177), (179, 157, 219))),
     }
+    # diamond-atari-<게임>도 diamond-atari와 같은 프리셋을 쓰되, 라벨에 게임 이름을 남긴다
+    # (26개 game id를 전부 나열하지 않기 위해 접두어로 매칭).
+    if model_id not in presets and model_id.startswith("diamond-atari-"):
+        preset = dict(presets["diamond-atari"])
+        preset["label"] = f"DIAMOND/ATARI ({model_id[len('diamond-atari-'):]})"
+        return DummyWorldModel(**preset)
     return DummyWorldModel(**presets.get(model_id, presets["oasis"]))

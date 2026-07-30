@@ -63,7 +63,9 @@ python tests/test_stack.py
 추론 루프, 인코딩, 페이싱, 프레임 패킹은 공통 런타임이 처리합니다.
 
 `workers/requirements-common.txt`는 게이트웨이·워커 공통 의존성(fastapi, numpy, ...)만
-담고 있습니다. `torch`, `hydra-core`(DIAMOND), `omegaconf`/`peft`/`flash-attn`(LongLive)
+담고 있습니다. `torch`, `hydra-core`(DIAMOND), `gymnasium`+`ale-py`(DIAMOND-Atari — 직접
+쓰진 않지만 `agent.py`가 무조건 `envs`를 import해서 없으면 로딩 자체가 실패합니다),
+`omegaconf`/`peft`/`flash-attn`(LongLive)
 같은 모델별 의존성은 각 저장소의 `requirements.txt`에서 설치하세요 — 이미 torch가 깔린
 conda 환경을 워커별로 쓰는 걸 권장합니다(`WM_USE_VENV=0`, 위 1번 절 참고).
 
@@ -79,21 +81,31 @@ conda 환경을 워커별로 쓰는 걸 권장합니다(`WM_USE_VENV=0`, 위 1�
 eloialonso/diamond의 `main`(Atari)과 `csgo` 브랜치는 코드가 통째로 다릅니다
 (denoiser 1단계 vs base+upsampler 2단계, 액션 인코딩도 이산 vs 51차원 연속). 그래서:
 
-* `models/diamond` (현재 `main` 브랜치, 이미 clone돼 있음) → `diamond-atari`가 사용.
-* CS:GO를 쓰려면 **별도 디렉터리**에 csgo 브랜치를 따로 clone 해야 합니다:
+* `models/diamond-atari` (현재 `main` 브랜치, `git worktree`로 관리) → `diamond-atari`가 사용.
+* CS:GO를 쓰려면 **별도 디렉터리**에 csgo 브랜치를 따로 clone(또는 worktree) 해야 합니다:
   ```bash
   git clone -b csgo https://github.com/eloialonso/diamond models/diamond-csgo
   ```
   체크포인트와 함께 초기 컨텍스트용 spawn 데이터셋(실제 녹화 프레임)도 필요합니다:
   ```bash
-  huggingface-cli download eloialonso/diamond --include "csgo/*" \
+  hf download eloialonso/diamond --include "csgo/*" \
       --local-dir models/diamond-csgo/downloads
   # csgo/model/csgo.pt  → WM_DIAMOND_CSGO_CKPT
   # csgo/spawn/         → WM_DIAMOND_CSGO_SPAWN_DIR
   ```
-* Atari 체크포인트: `huggingface-cli download eloialonso/diamond atari_100k/models/<게임>.pt`
-  → `WM_DIAMOND_ATARI_CKPT`. 체크포인트가 학습된 게임의 ALE 액션 개수와
-  `WM_DIAMOND_NUM_ACTIONS`(기본 18)가 반드시 일치해야 합니다.
+* Atari는 `atari_100k` 벤치마크 26개 게임 체크포인트를 **한 번에 전부** 받아서 한 워커가
+  `model_id`로 골라 서빙합니다(게임마다 프로세스를 따로 안 띄웁니다):
+  ```bash
+  hf download eloialonso/diamond --include "atari_100k/models/*" \
+      --local-dir server/weights/diamond_atari
+  # server/weights/diamond_atari/atari_100k/models/*.pt 로 받아지니,
+  # atari_100k/models/ 안의 *.pt 를 server/weights/diamond_atari/ 바로 아래로 옮기세요.
+  ```
+  `.env`에 `WM_DIAMOND_ATARI_WEIGHTS_DIR=server/weights/diamond_atari` 로 지정하면
+  `diamond-atari-<게임소문자>`(예: `diamond-atari-breakout`, `diamond-atari-mspacman`)
+  model_id로 각각 접속할 수 있습니다. 게임마다 학습된 액션 개수가 달라서(Breakout 4개,
+  Alien 18개 등 — ALE 축소 액션셋) `workers/common/actions.py`의 `ATARI_GAME_ACTIONS`에
+  게임별 정확한 목록을 `ale-py`로 직접 조회해 박아뒀습니다. 새로 맞출 값은 없습니다.
 
 ### LongLive — 반드시 `v1.0` 브랜치
 
@@ -107,11 +119,11 @@ eloialonso/diamond의 `main`(Atari)과 `csgo` 브랜치는 코드가 통째로 �
 ```bash
 # 1) Wan2.1-T2V-1.3B 베이스 (T5 텍스트 인코더 + VAE + 토크나이저) — LongLive가 아니라
 #    원본 Wan2.1 저장소 것입니다. LongLive 코드가 이 경로를 상대경로로 하드코딩해서 찾습니다.
-huggingface-cli download Wan-AI/Wan2.1-T2V-1.3B \
+hf download Wan-AI/Wan2.1-T2V-1.3B \
     --local-dir models/LongLive/wan_models/Wan2.1-T2V-1.3B
 
 # 2) LongLive-1.3B 체크포인트 (generator + LoRA)
-huggingface-cli download Efficient-Large-Model/LongLive --local-dir models/LongLive/longlive_models
+hf download Efficient-Large-Model/LongLive --local-dir models/LongLive/longlive_models
 ```
 
 LongLive는 WASD로 조작하는 게임형 월드모델이 아니라 텍스트 프롬프트로 다음 장면을 계속
