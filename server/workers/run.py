@@ -46,8 +46,8 @@ def factory(model_id: str):
         from .adapters.dummy import make_dummy
         return make_dummy(model_id)
     raise RuntimeError(
-        "Real model implementations are private. Set "
-        "VWM_MODEL_FACTORY=vwm.models.registry:create_model locally."
+        "No real model factory is configured. Set VWM_MODEL_FACTORY using "
+        "module:function format in the local environment."
     )
 
 

@@ -201,7 +201,7 @@ launch() {  # launch <이름> <포트> <WM_MODEL> <기본모델> <GPU> <모델�
   echo "기동: $name  포트 $port  GPU $gpu${repo:+  저장소 $repo}"
   CUDA_VISIBLE_DEVICES="$gpu" \
   WM_MODEL="$adapter" WM_DEFAULT_MODEL="$default" WM_PORT="$port" \
-  VWM_MODEL_FACTORY="${VWM_MODEL_FACTORY:-vwm.models.registry:create_model}" \
+  VWM_MODEL_FACTORY="${VWM_MODEL_FACTORY:-}" \
   PYTHONPATH="$PWD/..:$PWD${repo:+:$repo}" \
     "$PY" -m workers.run > "$RUN_DIR/$name.log" 2>&1 &
   echo $! > "$RUN_DIR/$name.pid"
