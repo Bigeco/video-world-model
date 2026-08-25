@@ -11,7 +11,7 @@
       network_estimate_ms ≈ client_round_trip.mean - (gpu_inference.mean + jpeg_encode.mean)
     게이트웨이 중계 + 실제 네트워크 왕복 + 약간의 스케줄링 지터가 여기 섞여 들어간다.
 
-세션마다 playground/<model_id>/<시작시각>/ 아래에:
+세션마다 results/server_sessions/<model_id>/<시작시각>/ 아래에:
   * stats.json      — 누적 통계 (저장 요청마다, 그리고 세션 종료 시 갱신)
   * frame_NNNNNN_*.png — "현재 프레임 저장" 요청이 올 때마다 원본 해상도로 저장
 """
@@ -32,10 +32,11 @@ from .encode import to_uint8_rgb
 
 log = logging.getLogger("stats")
 
-_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
-# workers/common → workers → server → VideoWorldModel, 그 아래 playground/
-_DEFAULT_PLAYGROUND = os.path.abspath(os.path.join(_THIS_DIR, "..", "..", "..", "playground"))
-PLAYGROUND_DIR = os.getenv("WM_PLAYGROUND_DIR", _DEFAULT_PLAYGROUND)
+_PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+SERVER_RESULTS_DIR = os.path.abspath(
+    os.path.join(os.getenv("VWM_RESULTS_DIR", os.path.join(_PROJECT_ROOT, "results")),
+                 "server_sessions")
+)
 
 
 def _percentile(values: List[float], p: float) -> Optional[float]:
@@ -101,7 +102,7 @@ class SessionStats:
     def session_dir(self) -> str:
         if self._session_dir is None:
             ts = time.strftime("%Y%m%d-%H%M%S", time.localtime(self.started_at))
-            self._session_dir = os.path.join(PLAYGROUND_DIR, self.model_id, ts)
+            self._session_dir = os.path.join(SERVER_RESULTS_DIR, self.model_id, ts)
             os.makedirs(self._session_dir, exist_ok=True)
         return self._session_dir
 

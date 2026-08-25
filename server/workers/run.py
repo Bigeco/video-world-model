@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import os
+from importlib import import_module
 
 import uvicorn
 
@@ -25,22 +26,29 @@ logging.basicConfig(
 
 ADAPTER = os.getenv("WM_MODEL", "oasis")
 DEFAULT_MODEL = os.getenv("WM_DEFAULT_MODEL", ADAPTER if ADAPTER != "dummy" else "oasis")
+FACTORY_PATH = os.getenv("VWM_MODEL_FACTORY", "")
+
+
+def _private_factory():
+    if not FACTORY_PATH:
+        return None
+    module_name, separator, function_name = FACTORY_PATH.partition(":")
+    if not separator or not module_name or not function_name:
+        raise ValueError("VWM_MODEL_FACTORY must use module:function format")
+    return getattr(import_module(module_name), function_name)
 
 
 def factory(model_id: str):
-    if ADAPTER == "oasis":
-        from .adapters.oasis import build
-    elif ADAPTER == "diamond-atari":
-        from .adapters.diamond_atari import build
-    elif ADAPTER == "diamond-csgo":
-        from .adapters.diamond_csgo import build
-    elif ADAPTER == "longlive":
-        from .adapters.longlive import build
-    elif ADAPTER == "dummy":
-        from .adapters.dummy import make_dummy as build
-    else:
-        raise ValueError(f"알 수 없는 WM_MODEL: {ADAPTER}")
-    return build(model_id)
+    private = _private_factory()
+    if private is not None:
+        return private(model_id, adapter=ADAPTER)
+    if ADAPTER == "dummy" or os.getenv("WM_DUMMY", "0") == "1":
+        from .adapters.dummy import make_dummy
+        return make_dummy(model_id)
+    raise RuntimeError(
+        "Real model implementations are private. Set "
+        "VWM_MODEL_FACTORY=vwm.models.registry:create_model locally."
+    )
 
 
 app = create_app(factory, DEFAULT_MODEL)

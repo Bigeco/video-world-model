@@ -21,7 +21,7 @@ from ..common.actions import Action
 from ..common.base import WorldModel
 
 
-class DummyWorldModel(WorldModel):
+class ToyWorldModel(WorldModel):
     """원근 투영 바닥 + 하늘. 카메라를 액션으로 조작할 수 있습니다."""
 
     def __init__(self, width: int = 320, height: int = 180, fps: int = 20,
@@ -126,7 +126,7 @@ class DummyWorldModel(WorldModel):
         return np.clip(img, 0, 255).astype(np.uint8)
 
 
-def make_dummy(model_id: str) -> DummyWorldModel:
+def make_toy(model_id: str) -> ToyWorldModel:
     """모델별로 색과 해상도를 다르게 해서 어떤 워커에 붙었는지 눈으로 구분되게."""
     presets = {
         "oasis": dict(width=320, height=180, fps=20, label="OASIS",
@@ -143,5 +143,10 @@ def make_dummy(model_id: str) -> DummyWorldModel:
     if model_id not in presets and model_id.startswith("diamond-atari-"):
         preset = dict(presets["diamond-atari"])
         preset["label"] = f"DIAMOND/ATARI ({model_id[len('diamond-atari-'):]})"
-        return DummyWorldModel(**preset)
-    return DummyWorldModel(**presets.get(model_id, presets["oasis"]))
+        return ToyWorldModel(**preset)
+    return ToyWorldModel(**presets.get(model_id, presets["oasis"]))
+
+
+# 서버 환경변수와 기존 호출부를 위한 하위 호환 별칭.
+DummyWorldModel = ToyWorldModel
+make_dummy = make_toy

@@ -81,15 +81,15 @@ conda 환경을 워커별로 쓰는 걸 권장합니다(`WM_USE_VENV=0`, 위 1�
 eloialonso/diamond의 `main`(Atari)과 `csgo` 브랜치는 코드가 통째로 다릅니다
 (denoiser 1단계 vs base+upsampler 2단계, 액션 인코딩도 이산 vs 51차원 연속). 그래서:
 
-* `models/diamond-atari` (현재 `main` 브랜치, `git worktree`로 관리) → `diamond-atari`가 사용.
+* `external/models/diamond-atari` (현재 `main` 브랜치, `git worktree`로 관리) → `diamond-atari`가 사용.
 * CS:GO를 쓰려면 **별도 디렉터리**에 csgo 브랜치를 따로 clone(또는 worktree) 해야 합니다:
   ```bash
-  git clone -b csgo https://github.com/eloialonso/diamond models/diamond-csgo
+  git clone -b csgo https://github.com/eloialonso/diamond external/models/diamond-csgo
   ```
   체크포인트와 함께 초기 컨텍스트용 spawn 데이터셋(실제 녹화 프레임)도 필요합니다:
   ```bash
   hf download eloialonso/diamond --include "csgo/*" \
-      --local-dir models/diamond-csgo/downloads
+      --local-dir external/models/diamond-csgo/downloads
   # csgo/model/csgo.pt  → WM_DIAMOND_CSGO_CKPT
   # csgo/spawn/         → WM_DIAMOND_CSGO_SPAWN_DIR
   ```
@@ -109,7 +109,7 @@ eloialonso/diamond의 `main`(Atari)과 `csgo` 브랜치는 코드가 통째로 �
 
 ### LongLive — 반드시 `v1.0` 브랜치
 
-`models/LongLive`의 기본(`main`) 브랜치는 **LongLive 2.0**(5B, 오프라인 배치 생성
+`external/models/LongLive`의 기본(`main`) 브랜치는 **LongLive 2.0**(5B, 오프라인 배치 생성
 전용 — 프레임 스트리밍이 안 됩니다)입니다. 이 프로젝트가 필요로 하는 실시간 인터랙티브
 버전(LongLive-1.3B, `interactive_inference.py`)은 `v1.0` 브랜치에만 있습니다 —
 이미 이 저장소에서 `git checkout v1.0`으로 전환해뒀습니다.
@@ -120,10 +120,10 @@ eloialonso/diamond의 `main`(Atari)과 `csgo` 브랜치는 코드가 통째로 �
 # 1) Wan2.1-T2V-1.3B 베이스 (T5 텍스트 인코더 + VAE + 토크나이저) — LongLive가 아니라
 #    원본 Wan2.1 저장소 것입니다. LongLive 코드가 이 경로를 상대경로로 하드코딩해서 찾습니다.
 hf download Wan-AI/Wan2.1-T2V-1.3B \
-    --local-dir models/LongLive/wan_models/Wan2.1-T2V-1.3B
+    --local-dir external/models/LongLive/wan_models/Wan2.1-T2V-1.3B
 
 # 2) LongLive-1.3B 체크포인트 (generator + LoRA)
-hf download Efficient-Large-Model/LongLive --local-dir models/LongLive/longlive_models
+hf download Efficient-Large-Model/LongLive --local-dir external/models/LongLive/longlive_models
 ```
 
 LongLive는 WASD로 조작하는 게임형 월드모델이 아니라 텍스트 프롬프트로 다음 장면을 계속

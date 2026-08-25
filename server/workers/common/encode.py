@@ -7,6 +7,8 @@ from typing import Callable
 
 import numpy as np
 
+from .frames import to_uint8_rgb
+
 # JPEG 인코더: cv2가 가장 빠르지만 없으면 PIL로 떨어진다.
 _encoder: Callable[[np.ndarray, int], bytes]
 
@@ -36,36 +38,6 @@ except ImportError:  # pragma: no cover - 환경에 따라 갈림
 
     _encoder = _encode
     BACKEND = "pillow"
-
-
-def to_uint8_rgb(frame: np.ndarray) -> np.ndarray:
-    """모델 출력을 HxWx3 uint8 RGB로 정규화한다.
-
-    받아들이는 형태:
-      - float 배열, 값 범위 [0,1] 또는 [-1,1]
-      - uint8 배열
-      - CHW (채널 우선) 또는 HWC
-      - 그레이스케일 HxW → 3채널 복제
-    """
-    arr = np.asarray(frame)
-
-    if arr.ndim == 2:
-        arr = np.stack([arr] * 3, axis=-1)
-    elif arr.ndim == 3 and arr.shape[0] in (1, 3) and arr.shape[-1] not in (1, 3):
-        arr = np.transpose(arr, (1, 2, 0))          # CHW → HWC
-    if arr.ndim == 3 and arr.shape[-1] == 1:
-        arr = np.repeat(arr, 3, axis=-1)
-
-    if arr.dtype != np.uint8:
-        arr = arr.astype(np.float32)
-        lo = float(arr.min()) if arr.size else 0.0
-        if lo < -0.01:                               # [-1,1] 범위로 판단
-            arr = (arr + 1.0) * 127.5
-        elif arr.max() <= 1.001:                     # [0,1] 범위로 판단
-            arr = arr * 255.0
-        arr = np.clip(arr, 0, 255).astype(np.uint8)
-
-    return np.ascontiguousarray(arr[:, :, :3])
 
 
 def encode_jpeg(frame: np.ndarray, quality: int = 80) -> bytes:

@@ -33,8 +33,8 @@ services:
   # --------------------------------------------------------------------
   oasis:
     build:
-      context: .
-      dockerfile: workers/oasis.Dockerfile
+      context: ..
+      dockerfile: server/workers/oasis.Dockerfile
     environment:
       WM_MODEL: oasis
       WM_DEFAULT_MODEL: oasis
@@ -43,9 +43,11 @@ services:
       WM_OASIS_VAE: /weights/vit-l-20.pt
       WM_DIFFUSION_STEPS: ${WM_DIFFUSION_STEPS:-10}
       WM_FPS_OASIS: ${WM_FPS_OASIS:-20}
+      VWM_RESULTS_DIR: /app/results
       NVIDIA_VISIBLE_DEVICES: "0"
     volumes:
       - ${WM_WEIGHTS_DIR:-./weights}:/weights:ro
+      - ${VWM_RESULTS_DIR:-../results}:/app/results
     shm_size: "8gb"
     restart: unless-stopped
     deploy:
@@ -61,8 +63,8 @@ services:
   # --------------------------------------------------------------------
   diamond-atari:
     build:
-      context: .
-      dockerfile: workers/diamond-atari.Dockerfile
+      context: ..
+      dockerfile: server/workers/diamond-atari.Dockerfile
     environment:
       WM_MODEL: diamond-atari
       WM_DUMMY: ${WM_DUMMY:-0}
@@ -71,9 +73,11 @@ services:
       WM_DIAMOND_ATARI_WEIGHTS_DIR: /weights/diamond_atari
       WM_DIAMOND_ATARI_DEFAULT_GAME: ${WM_DIAMOND_ATARI_DEFAULT_GAME:-Breakout}
       WM_DENOISE_STEPS: ${WM_DENOISE_STEPS:-3}
+      VWM_RESULTS_DIR: /app/results
       NVIDIA_VISIBLE_DEVICES: "1"
     volumes:
       - ${WM_WEIGHTS_DIR:-./weights}:/weights:ro
+      - ${VWM_RESULTS_DIR:-../results}:/app/results
     shm_size: "8gb"
     restart: unless-stopped
     deploy:
@@ -90,17 +94,19 @@ services:
   # --------------------------------------------------------------------
   diamond-csgo:
     build:
-      context: .
-      dockerfile: workers/diamond-csgo.Dockerfile
+      context: ..
+      dockerfile: server/workers/diamond-csgo.Dockerfile
     environment:
       WM_MODEL: diamond-csgo
       WM_DUMMY: ${WM_DUMMY:-0}
       WM_DIAMOND_CSGO_CKPT: /weights/diamond_csgo.pt
       WM_DIAMOND_CSGO_SPAWN_DIR: /weights/diamond_csgo_spawn
       WM_DENOISE_STEPS: ${WM_DENOISE_STEPS:-3}
+      VWM_RESULTS_DIR: /app/results
       NVIDIA_VISIBLE_DEVICES: "1"
     volumes:
       - ${WM_WEIGHTS_DIR:-./weights}:/weights:ro
+      - ${VWM_RESULTS_DIR:-../results}:/app/results
     shm_size: "8gb"
     restart: unless-stopped
     deploy:
@@ -116,17 +122,19 @@ services:
   # --------------------------------------------------------------------
   longlive:
     build:
-      context: .
-      dockerfile: workers/longlive.Dockerfile
+      context: ..
+      dockerfile: server/workers/longlive.Dockerfile
     environment:
       WM_MODEL: longlive
       WM_DUMMY: ${WM_DUMMY:-0}
       WM_LONGLIVE_REPO: /opt/LongLive
       WM_LONGLIVE_PROMPTS: ${WM_LONGLIVE_PROMPTS:-}
       WM_FPS_LONGLIVE: ${WM_FPS_LONGLIVE:-16}
+      VWM_RESULTS_DIR: /app/results
       NVIDIA_VISIBLE_DEVICES: "2"
     volumes:
       - ${WM_WEIGHTS_DIR:-./weights}:/weights:ro
+      - ${VWM_RESULTS_DIR:-../results}:/app/results
     shm_size: "8gb"
     restart: unless-stopped
     deploy:

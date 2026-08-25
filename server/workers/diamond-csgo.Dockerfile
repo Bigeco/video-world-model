@@ -8,7 +8,7 @@ ENV PYTHONUNBUFFERED=1
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libgl1 libglib2.0-0 git && rm -rf /var/lib/apt/lists/*
 
-COPY workers/requirements-common.txt .
+COPY server/workers/requirements-common.txt .
 RUN pip install --no-cache-dir -r requirements-common.txt
 
 # ---------------------------------------------------------------------
@@ -23,7 +23,8 @@ RUN pip install --no-cache-dir -r requirements-common.txt
 #   csgo/model/csgo.pt → WM_DIAMOND_CSGO_CKPT, csgo/spawn/ → WM_DIAMOND_CSGO_SPAWN_DIR
 # ---------------------------------------------------------------------
 
-COPY workers/ /app/workers/
+COPY server/workers/ /app/workers/
+ENV PYTHONPATH=/app
 
 EXPOSE 8000
 ENV WM_MODEL=diamond-csgo
