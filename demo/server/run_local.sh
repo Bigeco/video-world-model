@@ -202,7 +202,7 @@ launch() {  # launch <이름> <포트> <WM_MODEL> <기본모델> <GPU> <모델�
   CUDA_VISIBLE_DEVICES="$gpu" \
   WM_MODEL="$adapter" WM_DEFAULT_MODEL="$default" WM_PORT="$port" \
   VWM_MODEL_FACTORY="${VWM_MODEL_FACTORY:-}" \
-  PYTHONPATH="$PWD/..:$PWD${repo:+:$repo}" \
+  PYTHONPATH="$PWD:${VWM_RESEARCH_ROOT:-$PWD/../../research}${repo:+:$repo}" \
     "$PY" -m workers.run > "$RUN_DIR/$name.log" 2>&1 &
   echo $! > "$RUN_DIR/$name.pid"
 }
@@ -214,10 +214,10 @@ launch() {  # launch <이름> <포트> <WM_MODEL> <기본모델> <GPU> <모델�
 # (어댑터 코드가 config/ 를 찾을 때 쓰는 WM_DIAMOND_*_REPO 자체는 저장소 루트 그대로).
 diamond_src() { [ -n "$1" ] && echo "$1/src"; }
 
-launch oasis         8001 oasis          oasis         "${GPU_OASIS:-0}"          "${WM_OASIS_REPO:-$PWD/../external/models/open-oasis}"
-launch diamond-atari 8002 diamond-atari  diamond-atari "${GPU_DIAMOND_ATARI:-1}"  "$(diamond_src "${WM_DIAMOND_ATARI_REPO:-$PWD/../external/models/diamond-atari}")"
-launch diamond-csgo  8003 diamond-csgo   diamond-csgo  "${GPU_DIAMOND_CSGO:-1}"   "$(diamond_src "${WM_DIAMOND_CSGO_REPO:-$PWD/../external/models/diamond-csgo}")"
-launch longlive      8004 longlive       longlive      "${GPU_LONGLIVE:-2}"       "${WM_LONGLIVE_REPO:-$PWD/../external/models/LongLive}"
+launch oasis         8001 oasis          oasis         "${GPU_OASIS:-0}"          "${WM_OASIS_REPO:-$PWD/../../external/models/open-oasis}"
+launch diamond-atari 8002 diamond-atari  diamond-atari "${GPU_DIAMOND_ATARI:-1}"  "$(diamond_src "${WM_DIAMOND_ATARI_REPO:-$PWD/../../external/models/diamond-atari}")"
+launch diamond-csgo  8003 diamond-csgo   diamond-csgo  "${GPU_DIAMOND_CSGO:-1}"   "$(diamond_src "${WM_DIAMOND_CSGO_REPO:-$PWD/../../external/models/diamond-csgo}")"
+launch longlive      8004 longlive       longlive      "${GPU_LONGLIVE:-2}"       "${WM_LONGLIVE_REPO:-$PWD/../../external/models/LongLive}"
 
 # --- 게이트웨이 ------------------------------------------------------------
 export WM_WORKER_OASIS="ws://127.0.0.1:8001/session"

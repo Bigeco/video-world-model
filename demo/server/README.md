@@ -1,5 +1,7 @@
 # 추론 백엔드 (gray 서버)
 
+> 명령의 `external/...`, `demo/server/...` 경로는 저장소 루트(`VideoWorldModel2/`) 기준입니다.
+
 브라우저가 붙는 게이트웨이 하나와, 모델별 GPU 워커로 구성됩니다.
 
 ```
@@ -97,9 +99,9 @@ eloialonso/diamond의 `main`(Atari)과 `csgo` 브랜치는 코드가 통째로 �
   `model_id`로 골라 서빙합니다(게임마다 프로세스를 따로 안 띄웁니다):
   ```bash
   hf download eloialonso/diamond --include "atari_100k/models/*" \
-      --local-dir server/weights/diamond_atari
-  # server/weights/diamond_atari/atari_100k/models/*.pt 로 받아지니,
-  # atari_100k/models/ 안의 *.pt 를 server/weights/diamond_atari/ 바로 아래로 옮기세요.
+      --local-dir demo/server/weights/diamond_atari
+  # demo/server/weights/diamond_atari/atari_100k/models/*.pt 로 받아지니,
+  # atari_100k/models/ 안의 *.pt 를 demo/server/weights/diamond_atari/ 바로 아래로 옮기세요.
   ```
   `.env`에 `WM_DIAMOND_ATARI_WEIGHTS_DIR=server/weights/diamond_atari` 로 지정하면
   `diamond-atari-<게임소문자>`(예: `diamond-atari-breakout`, `diamond-atari-mspacman`)

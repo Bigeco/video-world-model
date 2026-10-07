@@ -62,9 +62,11 @@ results/
 *.swp
 *~
 # 외부 바이너리·저장소 (리포 루트 기준)
-/bin/
-/models/
-/external/models/
-/vwm/environments/vendor/
-/playground/
+/external/
+/demo/bin/
+/research/vwm/environments/vendor/
+/research/vwm/benchmark/miniworld/outputs/
+/research/vwm/benchmark/miniworld/data/horizon_gt/
+/research/vwm/benchmark/miniworld/data/rule_gt
+/research/.run/
 /.worktrees/
